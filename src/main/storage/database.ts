@@ -289,6 +289,19 @@ export class AppDatabase {
     return run;
   }
 
+  getSetting<T>(key: string): T | undefined {
+    const row = this.query<Record<string, string | null>>("select value_json from app_settings where key = ?", [key])[0];
+    return row ? (JSON.parse(String(row.value_json)) as T) : undefined;
+  }
+
+  setSetting(key: string, value: unknown): void {
+    this.run(
+      `insert into app_settings (key, value_json, updated_at) values (?, ?, ?)
+      on conflict(key) do update set value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      [key, JSON.stringify(value), new Date().toISOString()]
+    );
+  }
+
   addLog(log: Omit<AuditLog, "id" | "createdAt">): AuditLog {
     const row: AuditLog = {
       id: randomUUID(),
@@ -387,6 +400,12 @@ export class AppDatabase {
         message text not null,
         metadata_json text not null,
         created_at text not null
+      );
+
+      create table if not exists app_settings (
+        key text primary key,
+        value_json text not null,
+        updated_at text not null
       );
     `);
   }

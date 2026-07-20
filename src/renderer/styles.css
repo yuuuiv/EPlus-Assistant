@@ -174,6 +174,31 @@ select:focus-visible {
   margin: 0 auto;
 }
 
+.fatal-screen {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  gap: 0.75rem;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.fatal-screen h1 {
+  -webkit-text-fill-color: currentColor;
+  background: none;
+  color: var(--danger-hover);
+}
+
+.fatal-screen pre {
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0,0,0,0.28);
+  color: var(--warning);
+}
+
 /* ── Topbar ──────────────────────────────────────────────────────────── */
 .topbar {
   display: flex;
@@ -570,6 +595,24 @@ tbody tr:last-child td { border-bottom: none; }
   display: grid;
   color: var(--warning);
   font-size: 0.8rem;
+}
+
+.inline-result {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+.inline-result.ok {
+  border-color: rgba(62,207,142,0.35);
+  background: rgba(62,207,142,0.08);
+}
+
+.inline-result.warn {
+  border-color: rgba(240,164,69,0.35);
+  background: rgba(240,164,69,0.08);
 }
 
 /* ── Logs ────────────────────────────────────────────────────────────── */

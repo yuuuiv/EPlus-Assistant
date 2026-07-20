@@ -147,6 +147,53 @@ export interface AuditLog {
   createdAt: string;
 }
 
+export type VerificationMailboxMode = "manual" | "imap" | "http-api" | "temp-mail-forwarder" | "auth-mailbox";
+
+export interface VerificationMailboxSettings {
+  providerId: string;
+  mailboxAddress: string;
+  mode: VerificationMailboxMode;
+  endpoint?: string;
+  username?: string;
+  senderAllowlist: string[];
+  subjectMatchers: string[];
+  pollingIntervalMs: number;
+  timeoutMs: number;
+  secretConfigured: boolean;
+  updatedAt?: string;
+}
+
+export interface VerificationMailboxUpdate {
+  providerId: string;
+  mailboxAddress: string;
+  mode: VerificationMailboxMode;
+  endpoint?: string;
+  username?: string;
+  password?: string;
+  apiToken?: string;
+  senderAllowlist: string[];
+  subjectMatchers: string[];
+  pollingIntervalMs: number;
+  timeoutMs: number;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface VerificationCodeReadInput {
+  recipient?: string;
+  startedAt?: string;
+  timeoutMs?: number;
+}
+
+export interface VerificationCodeReadResult {
+  code?: string;
+  manualActionRequired: boolean;
+  reason: string;
+}
+
 export interface ImportReport {
   inserted: number;
   updated: number;
@@ -160,6 +207,7 @@ export interface DashboardState {
   tasks: LotteryTask[];
   runs: AccountRun[];
   logs: AuditLog[];
+  verificationMailbox: VerificationMailboxSettings;
   dataDir: string;
 }
 

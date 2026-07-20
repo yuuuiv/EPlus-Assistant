@@ -4,6 +4,7 @@ import type { AppDatabase } from "./storage/database.js";
 import type { SecretStore } from "./storage/secretStore.js";
 import { AccountService } from "./services/accountService.js";
 import { EventService } from "./services/eventService.js";
+import { SettingsService } from "./services/settingsService.js";
 import { TaskService } from "./services/taskService.js";
 import type { ImportAccountsInput } from "../shared/ipc.js";
 
@@ -14,6 +15,7 @@ export function registerIpc(
 ): void {
   const accountService = new AccountService(db, secretStore);
   const eventService = new EventService(db);
+  const settingsService = new SettingsService(db, secretStore);
   const taskService = new TaskService(db);
 
   ipcMain.handle("app:get-state", () => ({
@@ -22,6 +24,7 @@ export function registerIpc(
     tasks: taskService.listTasks(),
     runs: taskService.listRuns(),
     logs: db.listLogs(),
+    verificationMailbox: settingsService.getVerificationMailbox(),
     dataDir: db.getDataDir()
   }));
 
@@ -52,6 +55,13 @@ export function registerIpc(
   );
   ipcMain.handle("run:update-status", (_event, runId: string, status: string, note?: string) =>
     taskService.updateRunStatus(runId, status as any, note)
+  );
+  ipcMain.handle("settings:save-verification-mailbox", (_event, input) =>
+    settingsService.saveVerificationMailbox(input)
+  );
+  ipcMain.handle("settings:test-verification-mailbox", () => settingsService.testVerificationMailbox());
+  ipcMain.handle("settings:read-verification-code", (_event, input) =>
+    settingsService.readVerificationCode(input)
   );
   ipcMain.handle("log:add", (_event, message: string, level = "info", metadata = {}) =>
     db.addLog({ message, level, metadata })

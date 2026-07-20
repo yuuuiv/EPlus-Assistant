@@ -11,6 +11,9 @@ const api: ElectronApi = {
   createTask: (input) => ipcRenderer.invoke("task:create", input),
   updateTaskStatus: (taskId, status) => ipcRenderer.invoke("task:update-status", taskId, status),
   updateRunStatus: (runId, status, note) => ipcRenderer.invoke("run:update-status", runId, status, note),
+  saveVerificationMailbox: (input) => ipcRenderer.invoke("settings:save-verification-mailbox", input),
+  testVerificationMailbox: () => ipcRenderer.invoke("settings:test-verification-mailbox"),
+  readVerificationCode: (input) => ipcRenderer.invoke("settings:read-verification-code", input),
   addLog: (message, level, metadata) => ipcRenderer.invoke("log:add", message, level, metadata),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };

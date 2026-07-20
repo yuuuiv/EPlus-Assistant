@@ -9,7 +9,12 @@ import type {
   EventOption,
   EventSnapshot,
   ImportReport,
-  LotteryPreference
+  LotteryPreference,
+  ValidationResult,
+  VerificationMailboxSettings,
+  VerificationMailboxUpdate,
+  VerificationCodeReadInput,
+  VerificationCodeReadResult
 } from "./types.js";
 
 export interface AddAccountInput extends AccountInput {
@@ -46,6 +51,9 @@ export interface ElectronApi {
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
   updateTaskStatus(taskId: string, status: string): Promise<void>;
   updateRunStatus(runId: string, status: string, note?: string): Promise<void>;
+  saveVerificationMailbox(input: VerificationMailboxUpdate): Promise<VerificationMailboxSettings>;
+  testVerificationMailbox(): Promise<ValidationResult>;
+  readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
   addLog(message: string, level?: "info" | "warn" | "error", metadata?: Record<string, unknown>): Promise<void>;
   openDataFolder(): Promise<void>;
 }
@@ -65,5 +73,10 @@ export type {
   EventOption,
   EventSnapshot,
   ImportReport,
-  LotteryPreference
+  LotteryPreference,
+  ValidationResult,
+  VerificationCodeReadInput,
+  VerificationCodeReadResult,
+  VerificationMailboxSettings,
+  VerificationMailboxUpdate
 };

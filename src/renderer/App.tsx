@@ -5,6 +5,7 @@ import {
   FileDown,
   FolderOpen,
   ListTodo,
+  MailCheck,
   Plus,
   RefreshCw,
   Search,
@@ -22,7 +23,10 @@ import type {
   EventOption,
   EventSnapshot,
   ImportReport,
-  LotteryPreference
+  LotteryPreference,
+  VerificationCodeReadResult,
+  VerificationMailboxSettings,
+  VerificationMailboxUpdate
 } from "../shared/ipc.js";
 
 const emptyState: DashboardState = {
@@ -31,6 +35,16 @@ const emptyState: DashboardState = {
   tasks: [],
   runs: [],
   logs: [],
+  verificationMailbox: {
+    providerId: "manual",
+    mailboxAddress: "",
+    mode: "manual",
+    senderAllowlist: ["eplus.co.jp"],
+    subjectMatchers: ["認証", "確認", "コード", "e\\+"],
+    pollingIntervalMs: 5000,
+    timeoutMs: 180000,
+    secretConfigured: false
+  },
   dataDir: ""
 };
 
@@ -94,6 +108,40 @@ function parsePerAccountCodes(value: string, accounts: Account[]): Record<string
     }
   }
   return byAccount;
+}
+
+function toMultiline(items: string[]): string {
+  return items.join("\n");
+}
+
+function fromMultiline(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function mailboxToForm(settings: VerificationMailboxSettings): VerificationMailboxUpdate & {
+  senderAllowlistText: string;
+  subjectMatchersText: string;
+  password: string;
+  apiToken: string;
+} {
+  return {
+    providerId: settings.providerId,
+    mailboxAddress: settings.mailboxAddress,
+    mode: settings.mode,
+    endpoint: settings.endpoint ?? "",
+    username: settings.username ?? "",
+    password: "",
+    apiToken: "",
+    senderAllowlist: settings.senderAllowlist,
+    subjectMatchers: settings.subjectMatchers,
+    senderAllowlistText: toMultiline(settings.senderAllowlist),
+    subjectMatchersText: toMultiline(settings.subjectMatchers),
+    pollingIntervalMs: settings.pollingIntervalMs,
+    timeoutMs: settings.timeoutMs
+  };
 }
 
 const STATUS_TONE: Record<string, string> = {
@@ -241,7 +289,7 @@ export function App() {
     label: "",
     eplusEmail: "",
     password: "",
-    mailProviderId: "manual",
+    mailProviderId: "global-verification-mailbox",
     tags: "",
     enabled: true,
     mailConfig: "{}"
@@ -271,10 +319,16 @@ export function App() {
   const [message, setMessage] = useState<string>("");
   const [report, setReport] = useState<ImportReport | undefined>();
   const [isParsingEvent, setIsParsingEvent] = useState(false);
+  const [mailboxForm, setMailboxForm] = useState(() => mailboxToForm(emptyState.verificationMailbox));
+  const [mailboxReadResult, setMailboxReadResult] = useState<VerificationCodeReadResult | undefined>();
 
   async function refresh() {
     const snapshot = await window.eplusApi.getState();
     setState(snapshot);
+    setMailboxForm((current) => {
+      const hasLocalSecretInput = Boolean(current.password || current.apiToken);
+      return hasLocalSecretInput ? current : mailboxToForm(snapshot.verificationMailbox);
+    });
     setTaskForm((current) => ({
       ...current,
       eventSnapshotId: current.eventSnapshotId || snapshot.events[0]?.id || "",
@@ -323,6 +377,39 @@ export function App() {
     setReport(result);
     setMessage(`导入完成：${result.inserted} 新增，${result.updated} 更新，${result.errors.length} 个错误`);
     await refresh();
+  }
+
+  async function handleSaveMailbox() {
+    const saved = await window.eplusApi.saveVerificationMailbox({
+      providerId: mailboxForm.providerId,
+      mailboxAddress: mailboxForm.mailboxAddress,
+      mode: mailboxForm.mode,
+      endpoint: mailboxForm.endpoint,
+      username: mailboxForm.username,
+      password: mailboxForm.password,
+      apiToken: mailboxForm.apiToken,
+      senderAllowlist: fromMultiline(mailboxForm.senderAllowlistText),
+      subjectMatchers: fromMultiline(mailboxForm.subjectMatchersText),
+      pollingIntervalMs: Number(mailboxForm.pollingIntervalMs),
+      timeoutMs: Number(mailboxForm.timeoutMs)
+    });
+    setMessage(`验证码邮箱已保存：${saved.mode === "manual" ? "手动模式" : saved.mailboxAddress}`);
+    setMailboxForm(mailboxToForm(saved));
+    await refresh();
+  }
+
+  async function handleTestMailbox() {
+    const result = await window.eplusApi.testVerificationMailbox();
+    setMessage(`${result.ok ? "配置检查通过" : "配置检查失败"}：${result.message}`);
+  }
+
+  async function handleReadMailbox() {
+    const result = await window.eplusApi.readVerificationCode({
+      recipient: mailboxForm.mailboxAddress,
+      timeoutMs: Number(mailboxForm.timeoutMs)
+    });
+    setMailboxReadResult(result);
+    setMessage(result.code ? `读取到验证码：${result.code}` : `验证码读取未完成：${result.reason}`);
   }
 
   async function handleSaveEvent() {
@@ -440,6 +527,53 @@ export function App() {
               ))}
             </div>
           ) : null}
+        </section>
+
+        <section className="panel wide">
+          <div className="panel-head">
+            <h2><MailCheck size={16} />验证码总邮箱</h2>
+            <span className="muted">触发邮箱验证码时优先读取这里；不可用则人工输入</span>
+          </div>
+          <div className="form-grid account-grid">
+            <label>读取模式
+              <select value={mailboxForm.mode} onChange={(e) => setMailboxForm({ ...mailboxForm, mode: e.target.value as VerificationMailboxUpdate["mode"], providerId: e.target.value })}>
+                <option value="manual">手动输入</option>
+                <option value="imap">IMAP 邮箱</option>
+                <option value="http-api">HTTP API</option>
+                <option value="temp-mail-forwarder">temp-mail forwarder</option>
+                <option value="auth-mailbox">auth mailbox</option>
+              </select>
+            </label>
+            <label>总邮箱地址<input value={mailboxForm.mailboxAddress} onChange={(e) => setMailboxForm({ ...mailboxForm, mailboxAddress: e.target.value })} placeholder="verify@example.com" /></label>
+            <label>Provider ID<input value={mailboxForm.providerId} onChange={(e) => setMailboxForm({ ...mailboxForm, providerId: e.target.value })} /></label>
+            <label>Endpoint<input value={mailboxForm.endpoint} onChange={(e) => setMailboxForm({ ...mailboxForm, endpoint: e.target.value })} placeholder="https://..." /></label>
+            <label>用户名<input value={mailboxForm.username} onChange={(e) => setMailboxForm({ ...mailboxForm, username: e.target.value })} /></label>
+            <label>密码<input type="password" value={mailboxForm.password} onChange={(e) => setMailboxForm({ ...mailboxForm, password: e.target.value })} placeholder={state.verificationMailbox.secretConfigured ? "已保存，留空则不修改" : ""} /></label>
+            <label>API token<input type="password" value={mailboxForm.apiToken} onChange={(e) => setMailboxForm({ ...mailboxForm, apiToken: e.target.value })} placeholder={state.verificationMailbox.secretConfigured ? "已保存，留空则不修改" : ""} /></label>
+            <label>轮询间隔 ms<input type="number" min="1000" value={mailboxForm.pollingIntervalMs} onChange={(e) => setMailboxForm({ ...mailboxForm, pollingIntervalMs: Number(e.target.value) })} /></label>
+            <label>超时 ms<input type="number" min="30000" value={mailboxForm.timeoutMs} onChange={(e) => setMailboxForm({ ...mailboxForm, timeoutMs: Number(e.target.value) })} /></label>
+            <label className="full">发件人域名白名单<textarea rows={3} value={mailboxForm.senderAllowlistText} onChange={(e) => setMailboxForm({ ...mailboxForm, senderAllowlistText: e.target.value })} /></label>
+            <label className="full">主题匹配规则<textarea rows={3} value={mailboxForm.subjectMatchersText} onChange={(e) => setMailboxForm({ ...mailboxForm, subjectMatchersText: e.target.value })} /></label>
+          </div>
+          <div className="schema-summary">
+            <div className="summary-row">
+              <span className={state.verificationMailbox.mode === "manual" ? "badge badge-yellow" : "badge badge-teal"}>{state.verificationMailbox.mode}</span>
+              <span className={state.verificationMailbox.secretConfigured ? "badge badge-green" : "badge badge-gray"}>
+                {state.verificationMailbox.secretConfigured ? "密钥已保存" : "未保存密钥"}
+              </span>
+              <span className="muted">验证码正文不会写入日志；匹配失败时任务进入人工接管。</span>
+            </div>
+            {mailboxReadResult ? (
+              <div className={`inline-result ${mailboxReadResult.code ? "ok" : "warn"}`}>
+                {mailboxReadResult.code ? `验证码：${mailboxReadResult.code}` : mailboxReadResult.reason}
+              </div>
+            ) : null}
+          </div>
+          <div className="actions">
+            <button className="icon-button" onClick={() => runAction(handleTestMailbox)}><MailCheck size={16} />检查配置</button>
+            <button className="icon-button" onClick={() => runAction(handleReadMailbox)}><MailCheck size={16} />读取验证码</button>
+            <button className="primary" onClick={() => runAction(handleSaveMailbox)}><ShieldCheck size={16} />保存邮箱设置</button>
+          </div>
         </section>
 
         <section className="panel">
