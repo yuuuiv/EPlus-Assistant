@@ -583,14 +583,44 @@ interface MailProvider {
 }
 ```
 
-建议实现两个适配器：
+验证码邮件源的接入方式如下：
 
-1. `TempMailForwarderAdapter`：面向 `temp-mail` 项目暴露的邮件查询接口，按转发目标邮箱检索新到邮件。
-2. `AuthMailboxAdapter`：面向 `auth` 项目提供的认证或邮箱读取接口。
+1. **cerise-bouquet Temp-Mail Forwarder**（`temp-mail-forwarder` 模式）：调用 `mail.cerise-bouquet.xyz` 的 `/api/parsed_mails` 端点（`agentParsedMails: true`）。对应 `HttpJsonMailProvider`，代码中已实现（`src/main/adapters/mailProviders.ts:79-203`）。引用仓库：`temp-mail` 项目提供邮件转发与解析服务。
 
-验证码提取规则应由邮件正文 DOM/HTML 解析后匹配，至少校验发件人域名、接收时间晚于任务开始时间和邮件主题。不得仅以任意六位数字正则匹配。匹配失败时转为人工输入验证码。
+2. **cerise-bouquet Auth Mailbox**（`auth-mailbox` 模式）：调用 `mail.cerise-bouquet.xyz` 的 `/api/temp-mail/mails?app_id=` 端点。对应 `AuthMailboxProvider`，代码中已实现（`src/main/adapters/mailProviders.ts:205-245`）。引用仓库：`auth` 项目提供统一邮箱认证服务，`ticketjam-watcher` 项目提供邮件监听。
 
-邮件服务不可用、超时或发现多封候选邮件时，`AccountRun` 进入 `AwaitingManualAction`，浏览器保留在验证码输入页，用户可在 UI 中输入验证码后继续。
+3. **自建 Cloudflare Email**：Cloudflare Email Routing 规则或 Worker 将 Eplus 发来的验证码邮件**转发至 cerise-bouquet 邮箱**。对于应用程序而言，Cloudflare Email 是一个**邮件路由前台**，不是新的适配器——应用仍通过上述 cerise-bouquet 适配器读取验证码。操作者在 Cloudflare 控制面板配置 Email Routing 规则，将 Eplus 发件域名的邮件转发至 cerise-bouquet 的总邮箱地址。应用本身不感知 Cloudflare 的存在。
+
+4. **手动输入**（`manual` 模式）：对应 `ManualMailProvider`（`src/main/adapters/mailProviders.ts:42-53`），要求操作者在 UI 中查看验证码邮件后手动输入。
+
+> IMAP 邮箱和通用 HTTP API 邮箱模式（`imap`、`http-api`）已从支持的自动模式中移除。若操作者此前配置了这些模式，应迁移至上述 cerise-bouquet 或手动模式。
+
+### 7.1 共享邮箱的验证码归属策略
+
+所有 Eplus 账号的验证码邮件均发往**同一个** cerise-bouquet 总邮箱地址。由于应用无法为每个账号分配独立的收件别名，需要在收到验证码时判断该验证码属于哪个账号。
+
+策略（按优先级）：
+
+1. **时间窗口匹配**：记录每个账号触发发送验证码的时间戳。收到新邮件时，仅匹配在时间窗口内（邮件接收时间 >= 该账号最近一次触发时间）的账号。
+2. **邮件内容匹配**：检查邮件正文或标题中是否包含特定 Eplus 账号/邮箱的引用。确切的匹配信号取决于 Eplus 在验证码邮件中填入的内容（待核对）。
+3. **最新未认领优先**：若上述条件匹配到多个账号，取最新发送请求且尚未认领验证码的账号。
+4. **歧义降级为人工**：当多个账号的时间窗口显著重叠且邮件内容无法区分时，暂停所有匹配账号的运行，在 UI 中提示操作者手动选择该验证码所属的账号。
+
+该策略的实现细节（特别是步骤 2 的邮件内容匹配信号）标记为待核对，需在实际收到 Eplus 验证码邮件后确认邮件模板结构。
+
+### 7.2 验证码提取规则
+
+验证码提取由邮件正文 HTML 解析后匹配，至少校验以下条件：
+
+- 发件人域名必须属于配置的允许列表。
+- 邮件接收时间必须晚于任务开始时间。
+- 邮件主题须匹配配置的主题正则表达式。
+
+不得仅以任意六位数字正则匹配。优先按已知格式（`認証コード：123456`、`確認コード 123456` 等）提取；仅在以上格式均不匹配时才回退到通用六位数字模式。
+
+### 7.3 异常处理
+
+邮件服务不可用、超时或发现多封候选邮件且无法自动区分时，`AccountRun` 进入 `AwaitingManualAction`，浏览器保留在验证码输入页，操作者可在 UI 中输入验证码后继续。多封候选邮件优先尝试归属策略（§7.1）自动区分；仅当策略无法判定时触发人工接管。
 
 ## 8. Eplus 浏览器适配器
 
