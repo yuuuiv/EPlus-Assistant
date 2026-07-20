@@ -50,15 +50,18 @@
 
 | 层 | 推荐实现 | 原因 |
 | --- | --- | --- |
-| 桌面 UI | Tauri 2 + React + TypeScript | 轻量、本地文件访问与密钥存储支持较好 |
-| 服务核心 | Rust（Tauri command） | 适合任务调度、加密存储、并发与稳定分发 |
-| 浏览器自动化 | Playwright for Node.js，使用持久化 Chromium profile | 对现代 Web 页面、等待条件、截图和人工接管支持成熟 |
-| 本地数据库 | SQLite（SQLCipher 或应用层 AES-GCM 字段加密） | 可查询任务历史，又便于单文件备份 |
-| 密钥保护 | Windows Credential Manager / DPAPI | 主密钥不直接落盘 |
-| Excel 导入 | SheetJS（前端预检）+ Rust `calamine`（最终导入） | 兼容 xlsx/csv，保留可验证的后端导入链路 |
-| 邮箱验证码适配 | HTTP Client + `temp-mail`、`auth` 项目的稳定 API | 将邮件服务变化隔离在适配器内 |
+| 桌面框架 | Electron 40（主进程 + preload + renderer，contextBridge IPC） | 成熟的跨平台桌面方案，提供安全的 IPC 通道与原生系统集成 |
+| 前端 UI | React 19 + TypeScript | 组件化开发，严格类型检查 |
+| 构建工具 | Vite | 快速的 HMR 与生产构建 |
+| 本地数据库 | sql.js（SQLite compiled to WASM）+ Electron safeStorage 字段加密 | 零依赖、单文件数据库；safeStorage 利用 OS 原生密钥链保护凭据 |
+| 浏览器自动化 | Playwright（`playwright-core` + Chromium）持久化 per-account context | 对现代 Web 页面、等待条件、截图和人工接管支持成熟；持久化 context 保留 cookie/会话状态 |
+| 页面解析 | cheerio（离线 DOM 解析） | 用于解析 Playwright 捕获的 HTML 快照，提取表单选项和页面结构 |
+| 网络层 | NetworkRotationProvider → Clash 控制器 API | 通过 Clash 外部控制器实现 per-account IP 轮换 |
+| 邮箱验证码适配 | HTTP Client + mail.cerise-bouquet.xyz（temp-mail forwarder / auth mailbox） | 将邮件服务变化隔离在适配器内 |
 
-初始 MVP 也可使用单一 TypeScript/Electron 进程实现；但应先保留以下接口边界，后续迁移到 Tauri 不影响业务逻辑。
+当前实现即为 Electron + TypeScript 单体应用，全部依赖均在 `package.json` 中声明。
+
+> **可选未来迁移**：若桌面体积或性能成为瓶颈，可评估迁移至 Tauri 2（Rust 后端）。当前架构已通过适配器接口保留此迁移路径，但 Tauri 并非当前或近期计划的技术栈。
 
 ## 4. 总体架构
 
