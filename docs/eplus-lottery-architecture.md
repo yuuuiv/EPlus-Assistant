@@ -355,29 +355,53 @@ interface MailProvider {
 
 ### 8.1 浏览器隔离
 
-- 每个账号使用独立的持久化浏览器 profile：`profiles/<account-id>/`。
+- 每个账号使用独立的持久化浏览器 profile：`profiles/<account-id>/`。此 profile 由浏览器会话引擎（文档 §4.x）统一管理，引擎在首次运行时自动创建，后续运行直接复用。
 - 默认串行执行账号任务，避免会话串扰、重复申请和不必要的高频访问。
 - 不注入隐藏自动化脚本，不规避站点安全机制；使用正常页面交互、显式等待与合理退避。
-- 每个页面跳转和最终提交前保存截图；含个人数据的截图按访问权限保存在本机。
+- 每个页面跳转和最终提交前保存截图与脱敏 HTML 快照。截图和快照的实际捕获由浏览器会话引擎的"为每一步保存快照"机制（文档 §4.x）统一负责，适配器本身不独立执行截图逻辑。
 
-### 8.2 页面模型
+### 8.2 页面模型（基于引擎与分类器）
 
-将站点交互拆成可测试步骤，每步都先读状态再动作：
+浏览器适配器的页面交互由一组可测试步骤构成。每步在浏览器会话引擎（文档 §4.x）上执行，并委托页面状态分类器（文档 §4.y）完成状态判定。引擎运行读→判→动→再读的步骤循环，分类器以 LIVE 页面为输入返回当前状态枚举；适配器根据分类器结果选择下一步操作。
+
+步骤列表与分类器状态的对应关系：
 
 ```text
-openEvent(url)
-discoverApplicationForm()
-login(email, password)
-detectChallenge()
-enterEmailCode(code)
-readAvailableOptions()
-applyPreference(preference)
-readReviewPage()
-submitApplication()
-readReceipt()
+openEvent(url)              → 引擎导航至 url，分类器判定页面类型
+login(email, password)      → 引擎填写邮箱密码，点击登录按钮（Login 状态自动处理）
+detectChallenge()            → 委托给分类器的完整状态集判定：
+                               - EmailCode → 自动/手动填写验证码
+                               - CaptchaSliderDevice → 暂停，人工接管
+                               - InterstitialConsent → 自动点击粉色/确认按钮
+                               - CheckboxGate → 自动勾选必选项
+enterEmailCode(code)         → 引擎填写验证码并继续（EmailCode 状态自动处理）
+readAvailableOptions()       → 引擎读取已渲染的表单选项（LotteryForm 状态）
+applyPreference(preference)  → 引擎按 LotteryPreference 填写表单（LotteryForm 状态）
+readReviewPage()             → 引擎读取确认页（Receipt 的前序状态）
+submitApplication()          → 驱动付款方式选择至 card/CVV 之前即提交
+readReceipt()                → 引擎读取回执页（Receipt 状态）
 ```
 
-`detectChallenge()` 应区分：邮箱验证码、CAPTCHA/滑块、站点设备确认、登录失败、临时限流、页面结构未知。除邮箱验证码外的验证统一人工接管。
+`detectChallenge()` 不再自行判断验证类型，而是将 LIVE 页面提交给分类器后根据其返回的状态枚举分发处理。除 `EmailCode` 和流程拦截页（`InterstitialConsent`、`CheckboxGate`）由引擎自动处理外，`CaptchaSliderDevice` 和 `Unknown` 统一触发人工接管。
+
+旧模型中一次运行只产生若干独立页面截图。新模型将适配器的执行过程记录为一条**流程快照**（flow snapshot）：一个有向的状态变迁图，包含每一步的访问状态、执行动作和决策点。
+
+流程快照为每次步骤动作记录三项数据：分类器判定的当前页面状态、适配器执行的具体操作（填写、点击、选择或暂停）、以及引擎"再读"后的结果页面状态。引擎的读→判→动→再读循环保证每步的输入和输出状态均被捕获，整条快照可完整回溯一次运行的全程路径。
+
+**决策点**（decision point）的定义因运行类型而不同：
+
+- **抽选运行**（lottery run）的流程快照记录所有可操作的决策点：点击了哪个粉色按钮（`cautionNext` 还是 `finalConsent`）、勾选了哪些 checkbox、选择了 day1 还是 day2 还是两天。这些决策点直接影响申请结果，是整条流程快照中最关键的审计节点。
+- **档案采集运行**（profile-harvest run）的流程快照仅记录访问过的页面状态序列，不记录决策点。采集运行只遍历页面、读取信息，不做任何选择，因此决策点概念不适用于采集上下文。
+
+流程快照按 `{accountId}/{runId}/flow-snapshot.json` 归档，与引擎捕获的截图和 HTML 快照置于同一 `artifacts/` 目录下。
+
+#### 提交边界
+
+`applyPreference` 和 `submitApplication` 负责将 `LotteryPreference` 转为页面操作。对于付款方式字段，引擎根据 `LotteryPreference.paymentMethodId` 选择对应的付款方式（如"クレジットカード"、"ファミリーマート"等），但自动化在此停止，不下钻至卡片信息层。
+
+如果 Eplus 流程在付款方式选择之后要求填写卡号、CVV、有效期等支付敏感字段，引擎不自动填充任何卡片数据，立即暂停当前账号并将 `AccountRun` 置为 `AwaitingManualAction`。操作者在可见的浏览器窗口中手动完成卡片信息填写后，点击"继续"恢复自动化。
+
+同行者（companions）在提交过程中仅作只读展示，显示于确认页上。适配器不对同行者字段进行任何自动选择或填写。同行者不属于 `LotteryPreference` 的可操作字段，也不参与申请提交逻辑。
 
 ### 8.3 幂等与重复申请保护
 
@@ -388,7 +412,11 @@ readReceipt()
 3. 计算 `account_id + canonical_event_id + preference` 的幂等键，并检查本地是否已成功提交。
 4. 只有用户确认的任务可进入最终提交；批量任务的首次最终提交须逐账号记录确认页摘要。
 
-提交按钮点击后不立即认为成功，必须读取站点回执页的申请编号或明确成功文案。网络中断则标记为 `UnknownSubmissionState`，恢复时先查询申请历史，禁止盲目重试。
+此外，引擎在提交前查询该账号的申请历史记录（由档案采集运行采集并持久化至本地数据库，详见 §4.y 中关于申请记录采集的 Todo-8 章节），将既有申请记录作为额外的重复检查来源。若历史记录中已存在该演出的申请受付番号，提交直接标记为 `AlreadyApplied`，不再进行页面操作。
+
+提交按钮点击后不立即认为成功，必须读取站点回执页的申请编号或明确成功文案。引擎根据分类器返回的 `Receipt` 状态确认提交是否完成；若 `Receipt` 状态中检测到"受付番号"，提取申请编号并标记 `AccountRun` 为 `Submitted`。
+
+网络中断或提交后未获得明确回执的，标记为 `UnknownSubmissionState`。恢复时先查询申请历史与本地幂等键，禁止盲目重试。引擎不会对状态未知的 `AccountRun` 自动重新提交。
 
 ## 9. 任务状态机与人工接管
 
