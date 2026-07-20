@@ -1,4 +1,4 @@
-import type { AccountRunStatus, TaskStatus } from "../shared/types.js";
+import type { AccountRunStatus, SubmissionIntentStatus, TaskStatus } from "../shared/types.js";
 
 const taskTransitions: Record<TaskStatus, TaskStatus[]> = {
   Draft: ["AwaitingConfirmation", "Cancelled"],
@@ -21,9 +21,17 @@ const runTransitions: Record<AccountRunStatus, AccountRunStatus[]> = {
   Submitting: ["Submitted", "UnknownSubmissionState", "Failed", "Cancelled"],
   Submitted: [],
   AlreadyApplied: [],
-  UnknownSubmissionState: ["Submitted", "Failed", "AwaitingManualAction"],
+  UnknownSubmissionState: ["Submitted", "AlreadyApplied", "Failed"],
   Failed: [],
   Cancelled: []
+};
+
+const submissionIntentTransitions: Record<SubmissionIntentStatus, SubmissionIntentStatus[]> = {
+  Prepared: ["Dispatching"],
+  Dispatching: ["Acknowledged", "Unknown"],
+  Acknowledged: [],
+  Unknown: ["Acknowledged", "Failed"],
+  Failed: []
 };
 
 export function canTransitionTask(from: TaskStatus, to: TaskStatus): boolean {
@@ -32,6 +40,10 @@ export function canTransitionTask(from: TaskStatus, to: TaskStatus): boolean {
 
 export function canTransitionRun(from: AccountRunStatus, to: AccountRunStatus): boolean {
   return runTransitions[from].includes(to);
+}
+
+export function canTransitionSubmissionIntent(from: SubmissionIntentStatus, to: SubmissionIntentStatus): boolean {
+  return submissionIntentTransitions[from].includes(to);
 }
 
 export function assertTaskTransition(from: TaskStatus, to: TaskStatus): void {
@@ -46,3 +58,8 @@ export function assertRunTransition(from: AccountRunStatus, to: AccountRunStatus
   }
 }
 
+export function assertSubmissionIntentTransition(from: SubmissionIntentStatus, to: SubmissionIntentStatus): void {
+  if (!canTransitionSubmissionIntent(from, to)) {
+    throw new Error(`Invalid submission intent transition: ${from} -> ${to}`);
+  }
+}

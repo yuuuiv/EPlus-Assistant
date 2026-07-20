@@ -1,15 +1,22 @@
 import type {
   Account,
   AccountInput,
+  AccountProfile,
   AccountRun,
+  ApplicationRecord,
   AuditLog,
+  Companion,
   CreateTaskInput,
   DashboardState,
   EplusRawFormSchema,
   EventOption,
   EventSnapshot,
   ImportReport,
+  LotteryResultRecord,
   LotteryPreference,
+  ManualActionInput,
+  PasswordRevealResponse,
+  SubmissionAuthorization,
   ValidationResult,
   VerificationMailboxSettings,
   VerificationMailboxUpdate,
@@ -41,6 +48,12 @@ export interface ImportAccountsInput {
   text: string;
 }
 
+export interface CreateTaskInputV2 extends CreateTaskInput {
+  preference: LotteryPreference & {
+    daySelectionByAccountId?: Record<string, Array<"day1" | "day2">>;
+  };
+}
+
 export interface ElectronApi {
   getState(): Promise<DashboardState>;
   addAccount(input: AddAccountInput): Promise<Account>;
@@ -49,8 +62,16 @@ export interface ElectronApi {
   discoverEvent(input: DiscoverEventInput): Promise<EventSnapshotInput>;
   saveEventSnapshot(input: EventSnapshotInput): Promise<EventSnapshot>;
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
+  createTaskV2(input: CreateTaskInputV2): Promise<{ taskId: string }>;
   updateTaskStatus(taskId: string, status: string): Promise<void>;
   updateRunStatus(runId: string, status: string, note?: string): Promise<void>;
+  revealPassword(accountId: string): Promise<PasswordRevealResponse>;
+  performManualAction(input: ManualActionInput): Promise<void>;
+  getAuthorization(input: { taskId: string; runId: string }): Promise<SubmissionAuthorization | null>;
+  listProfiles(accountId: string): Promise<AccountProfile | undefined>;
+  listCompanions(accountId: string): Promise<Companion[]>;
+  listApplicationRecords(accountId: string, filter?: Record<string, unknown>): Promise<ApplicationRecord[]>;
+  listLotteryResults(accountId: string, filter?: Record<string, unknown>): Promise<LotteryResultRecord[]>;
   saveVerificationMailbox(input: VerificationMailboxUpdate): Promise<VerificationMailboxSettings>;
   testVerificationMailbox(): Promise<ValidationResult>;
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
@@ -66,14 +87,21 @@ declare global {
 
 export type {
   Account,
+  AccountProfile,
   AccountRun,
+  ApplicationRecord,
   AuditLog,
+  Companion,
   DashboardState,
   EplusRawFormSchema,
   EventOption,
   EventSnapshot,
   ImportReport,
+  LotteryResultRecord,
   LotteryPreference,
+  ManualActionInput,
+  PasswordRevealResponse,
+  SubmissionAuthorization,
   ValidationResult,
   VerificationCodeReadInput,
   VerificationCodeReadResult,

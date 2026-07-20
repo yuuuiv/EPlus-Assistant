@@ -20,15 +20,21 @@ export function makeConfirmationDigest(input: {
   canonicalUrl: string;
   preference: LotteryPreference;
   accountIds: string[];
+  confirmationPolicy?: "required" | "disabled";
+  automationRiskAcknowledgementVersion?: number;
 }): string {
+  const confirmationInput = {
+    canonicalUrl: input.canonicalUrl,
+    preference: input.preference,
+    accountIds: [...input.accountIds].sort(),
+    ...(input.confirmationPolicy === undefined ? {} : { confirmationPolicy: input.confirmationPolicy }),
+    ...(input.automationRiskAcknowledgementVersion === undefined
+      ? {}
+      : { automationRiskAcknowledgementVersion: input.automationRiskAcknowledgementVersion })
+  };
+
   return createHash("sha256")
-    .update(
-      stableJson({
-        canonicalUrl: input.canonicalUrl,
-        preference: input.preference,
-        accountIds: [...input.accountIds].sort()
-      })
-    )
+    .update(stableJson(confirmationInput))
     .digest("hex");
 }
 
@@ -42,3 +48,6 @@ export function makeIdempotencyKey(input: {
     .digest("hex");
 }
 
+export function makePreferencesEqual(left: LotteryPreference, right: LotteryPreference): boolean {
+  return stableJson(left) === stableJson(right);
+}

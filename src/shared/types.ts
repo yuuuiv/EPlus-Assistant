@@ -70,6 +70,8 @@ export interface SerialCodeRequirement {
   placeholder?: string;
   errorSelectors: string[];
   knownErrorMessages: Array<{ code: "InvalidCode" | "UsedCode"; text: string }>;
+  availableDays?: Array<"day1" | "day2">;
+  daySelectionRequired?: boolean;
 }
 
 export interface EplusRawFormSchema {
@@ -109,8 +111,145 @@ export interface LotteryPreference {
   deliveryMethodId?: string;
   serialCode?: string;
   serialCodesByAccountId?: Record<string, string>;
+  daySelectionByAccountId?: Record<string, Array<"day1" | "day2">>;
   applicationLinkId?: string;
   consentFlags: Record<string, boolean>;
+}
+
+export interface AutomationRiskAcknowledgement {
+  version: number;
+  acknowledgedAt: string;
+  disclosureDigest: string;
+}
+
+export interface SubmissionAuthorization {
+  taskId: string;
+  runId: string;
+  accountId: string;
+  effectivePreferenceDigest: string;
+  reviewDigest: string;
+  idempotencyKey: string;
+  policy: "required" | "disabled";
+  acknowledgementVersion: number;
+  checkpointVersion: number;
+  createdAt: string;
+  expiresAt: string;
+  consumed: boolean;
+}
+
+export type SubmissionIntentStatus = "Prepared" | "Dispatching" | "Acknowledged" | "Unknown" | "Failed";
+
+export interface SubmissionIntent {
+  taskId: string;
+  runId: string;
+  status: SubmissionIntentStatus;
+  idempotencyKey: string;
+  preferenceDigest: string;
+  receiptApplicationId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NetworkLease {
+  accountId: string;
+  runId: string;
+  contextId: string;
+  networkFingerprint: string;
+  generation: number;
+  country: string;
+  policy: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PasswordRevealRequest {
+  accountId: string;
+  senderWindowId: string;
+  requestId: string;
+}
+
+export type PasswordRevealHandle = PasswordRevealRequest;
+
+export interface PasswordRevealResponse {
+  plaintext: string;
+  expiresAt: string;
+}
+
+export interface Companion {
+  name: string;
+  relationship?: string;
+  memberId?: string;
+  boundAt?: string;
+  unboundAt?: string;
+}
+
+export interface AccountProfile {
+  accountId: string;
+  eplusEmail: string;
+  encryptedPassword: string;
+  revealSupported: boolean;
+  phone?: string;
+  name?: string;
+  gender?: string;
+  birthday?: string;
+  address?: string;
+  companions: Companion[];
+  pastCompanions: Companion[];
+  harvestedAt: string;
+  harvestStatus: "Pending" | "Ok" | "Partial" | "Failed";
+}
+
+export interface ApplicationRecord {
+  id: string;
+  accountId: string;
+  eventTitle: string;
+  appliedAt: string;
+  sessionOrDay?: string;
+  ticketType: string;
+  quantity: number;
+  applicationId?: string;
+  status: string;
+  harvestedAt: string;
+}
+
+export interface LotteryResultRecord {
+  id: string;
+  accountId: string;
+  eventTitle: string;
+  resultKind: "中選" | "落選" | "待通知" | "取消";
+  decidedAt?: string;
+  paymentDeadline?: string;
+  applicationId?: string;
+  harvestedAt: string;
+}
+
+export type ProfileHarvestRunStatus =
+  | "Pending"
+  | "LoggingIn"
+  | "AwaitingEmailCode"
+  | "AwaitingManualAction"
+  | "Extracting"
+  | "Completed"
+  | "Failed";
+
+export interface ProfileHarvestRun {
+  id: string;
+  accountId: string;
+  status: ProfileHarvestRunStatus;
+  harvestedFields: string[];
+  errorDetail?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface ArtifactManifest {
+  id: string;
+  runId: string;
+  stepId: string;
+  kind: "screenshot" | "html-snapshot" | "flow-snapshot";
+  filePath: string;
+  maskedSelectors: string[];
+  createdAt: string;
 }
 
 export interface LotteryTask {
@@ -219,6 +358,6 @@ export interface CreateTaskInput {
 
 export interface ManualActionInput {
   runId: string;
-  action: "continue" | "cancel-account" | "cancel-task";
+  action: "continue" | "cancel-account" | "cancel-task" | "reconcile-unknown";
   verificationCode?: string;
 }
