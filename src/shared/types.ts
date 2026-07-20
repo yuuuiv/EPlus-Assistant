@@ -55,6 +55,34 @@ export interface EventOption {
   required: boolean;
 }
 
+export interface EplusApplicationLink {
+  id: string;
+  label: string;
+  href?: string;
+  status?: string;
+  sessionName?: string;
+  selectorHint?: string;
+}
+
+export interface SerialCodeRequirement {
+  required: boolean;
+  label: string;
+  placeholder?: string;
+  errorSelectors: string[];
+  knownErrorMessages: Array<{ code: "InvalidCode" | "UsedCode"; text: string }>;
+}
+
+export interface EplusRawFormSchema {
+  sourceKind: "standard-detail" | "serial-code" | "unknown";
+  options: EventOption[];
+  applicationLinks: EplusApplicationLink[];
+  quantityRange?: { min: number; max: number };
+  serialCode: SerialCodeRequirement;
+  selectorHints: Record<string, string>;
+  requiresManualInspection: boolean;
+  notes: string[];
+}
+
 export interface EventSnapshot {
   id: string;
   sourceUrl: string;
@@ -64,11 +92,7 @@ export interface EventSnapshot {
   scheduleText?: string;
   applicationDeadline?: string;
   fetchedAt: string;
-  rawFormSchema: {
-    options: EventOption[];
-    requiresManualInspection: boolean;
-    notes: string[];
-  };
+  rawFormSchema: EplusRawFormSchema;
   pageFingerprint: string;
 }
 
@@ -83,6 +107,9 @@ export interface LotteryPreference {
   entries: LotteryPreferenceEntry[];
   paymentMethodId: string;
   deliveryMethodId?: string;
+  serialCode?: string;
+  serialCodesByAccountId?: Record<string, string>;
+  applicationLinkId?: string;
   consentFlags: Record<string, boolean>;
 }
 
@@ -147,4 +174,3 @@ export interface ManualActionInput {
   action: "continue" | "cancel-account" | "cancel-task";
   verificationCode?: string;
 }
-

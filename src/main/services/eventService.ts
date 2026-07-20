@@ -1,6 +1,8 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { EventSnapshot } from "../../shared/types.js";
+import type { EventSnapshotInput } from "../../shared/ipc.js";
+import type { EplusRawFormSchema, EventSnapshot } from "../../shared/types.js";
 import type { AppDatabase } from "../storage/database.js";
+import { parseEplusPage } from "./eplusPageParser.js";
 
 function canonicalizeUrl(input: string): string {
   const url = new URL(input);
@@ -22,6 +24,34 @@ export class EventService {
     return this.db.listEvents();
   }
 
+  async discoverFromUrl(sourceUrl: string): Promise<EventSnapshotInput> {
+    const canonicalSource = canonicalizeUrl(sourceUrl);
+    const response = await fetch(canonicalSource, {
+      redirect: "follow",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "ja,en-US;q=0.9,en;q=0.8"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Eplus page fetch failed: HTTP ${response.status}`);
+    }
+    const html = await response.text();
+    const parsed = parseEplusPage(canonicalSource, html);
+    return {
+      sourceUrl: parsed.sourceUrl,
+      canonicalUrl: parsed.canonicalUrl,
+      title: parsed.title,
+      venue: parsed.venue,
+      scheduleText: parsed.scheduleText,
+      applicationDeadline: parsed.applicationDeadline,
+      pageFingerprint: parsed.pageFingerprint,
+      rawFormSchemaJson: JSON.stringify(parsed.rawFormSchema, null, 2)
+    };
+  }
+
   saveSnapshot(input: {
     sourceUrl: string;
     canonicalUrl?: string;
@@ -35,12 +65,21 @@ export class EventService {
     const canonicalUrl = input.canonicalUrl ? canonicalizeUrl(input.canonicalUrl) : canonicalizeUrl(input.sourceUrl);
     const rawFormSchema =
       input.rawFormSchemaJson?.trim()
-        ? JSON.parse(input.rawFormSchemaJson)
-        : {
+        ? normalizeSchema(JSON.parse(input.rawFormSchemaJson))
+        : ({
+            sourceKind: "unknown",
             options: [],
+            applicationLinks: [],
+            serialCode: {
+              required: false,
+              label: "抽选码",
+              errorSelectors: [],
+              knownErrorMessages: []
+            },
+            selectorHints: {},
             requiresManualInspection: true,
             notes: ["No parser configured yet. Enter the discovered options manually before running tasks."]
-          };
+          } satisfies EplusRawFormSchema);
     const snapshot: EventSnapshot = {
       id: randomUUID(),
       sourceUrl: input.sourceUrl,
@@ -55,4 +94,24 @@ export class EventService {
     };
     return this.db.saveEventSnapshot(snapshot);
   }
+}
+
+function normalizeSchema(input: any): EplusRawFormSchema {
+  const sourceKind =
+    input.sourceKind === "standard-detail" || input.sourceKind === "serial-code" ? input.sourceKind : "unknown";
+  return {
+    sourceKind,
+    options: input.options ?? [],
+    applicationLinks: input.applicationLinks ?? [],
+    quantityRange: input.quantityRange,
+    serialCode: input.serialCode ?? {
+      required: false,
+      label: "抽选码",
+      errorSelectors: [],
+      knownErrorMessages: []
+    },
+    selectorHints: input.selectorHints ?? {},
+    requiresManualInspection: Boolean(input.requiresManualInspection),
+    notes: input.notes ?? []
+  };
 }

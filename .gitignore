@@ -15,7 +15,9 @@ artifacts/
 # Local automation/cache files
 .codegraph/
 .omo/
+.agents/
+.claude/
+exports_*
 .vite/
 .DS_Store
 Thumbs.db
-

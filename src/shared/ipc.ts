@@ -5,6 +5,8 @@ import type {
   AuditLog,
   CreateTaskInput,
   DashboardState,
+  EplusRawFormSchema,
+  EventOption,
   EventSnapshot,
   ImportReport,
   LotteryPreference
@@ -25,6 +27,10 @@ export interface EventSnapshotInput {
   rawFormSchemaJson?: string;
 }
 
+export interface DiscoverEventInput {
+  sourceUrl: string;
+}
+
 export interface ImportAccountsInput {
   kind: "csv" | "json";
   text: string;
@@ -35,6 +41,7 @@ export interface ElectronApi {
   addAccount(input: AddAccountInput): Promise<Account>;
   importAccounts(input: ImportAccountsInput): Promise<ImportReport>;
   deleteAccount(id: string): Promise<void>;
+  discoverEvent(input: DiscoverEventInput): Promise<EventSnapshotInput>;
   saveEventSnapshot(input: EventSnapshotInput): Promise<EventSnapshot>;
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
   updateTaskStatus(taskId: string, status: string): Promise<void>;
@@ -49,5 +56,14 @@ declare global {
   }
 }
 
-export type { Account, AccountRun, AuditLog, DashboardState, EventSnapshot, ImportReport, LotteryPreference };
-
+export type {
+  Account,
+  AccountRun,
+  AuditLog,
+  DashboardState,
+  EplusRawFormSchema,
+  EventOption,
+  EventSnapshot,
+  ImportReport,
+  LotteryPreference
+};

@@ -50,3 +50,4 @@ Passwords and mail config are encrypted with Electron `safeStorage` before writi
 
 The MVP implements account management, CSV/JSON import, event snapshots, task creation, conservative task/run state transitions, local SQLite persistence, redacted logs, and adapter interfaces. The live Eplus browser adapter and concrete mail-provider integrations are still isolated behind interfaces and intentionally do not submit real lotteries yet.
 
+See [docs/eplus-assistant-user-guide.md](docs/eplus-assistant-user-guide.md) for the current operating manual, including automatic Eplus page parsing and serial-code lottery pages.

@@ -7,6 +7,7 @@ import {
   ListTodo,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   Trash2,
   Upload,
@@ -17,6 +18,8 @@ import type {
   Account,
   AccountRun,
   DashboardState,
+  EplusRawFormSchema,
+  EventOption,
   EventSnapshot,
   ImportReport,
   LotteryPreference
@@ -34,7 +37,23 @@ const emptyState: DashboardState = {
 const defaultPreference: LotteryPreference = {
   entries: [{ rank: 1, ticketTypeId: "", quantity: 1 }],
   paymentMethodId: "",
+  applicationLinkId: "",
   consentFlags: {}
+};
+
+const defaultSchema: EplusRawFormSchema = {
+  sourceKind: "unknown",
+  options: [],
+  applicationLinks: [],
+  serialCode: {
+    required: false,
+    label: "抽选码",
+    errorSelectors: [],
+    knownErrorMessages: []
+  },
+  selectorHints: {},
+  requiresManualInspection: true,
+  notes: ["粘贴 Eplus URL 后点击解析页面。"]
 };
 
 function toLines(value: string): string[] {
@@ -42,6 +61,109 @@ function toLines(value: string): string[] {
     .split(/[\n,;]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function schemaFromJson(value: string): EplusRawFormSchema {
+  try {
+    return { ...defaultSchema, ...JSON.parse(value || "{}") };
+  } catch {
+    return defaultSchema;
+  }
+}
+
+function getOption(schema: EplusRawFormSchema | undefined, kind: EventOption["kind"]) {
+  return schema?.options.find((option) => option.kind === kind);
+}
+
+function parsePerAccountCodes(value: string, accounts: Account[]): Record<string, string> {
+  const byAccount: Record<string, string> = {};
+  const accountByKey = new Map<string, Account>();
+  accounts.forEach((account) => {
+    accountByKey.set(account.id, account);
+    accountByKey.set(account.eplusEmail.toLowerCase(), account);
+    accountByKey.set(account.label.toLowerCase(), account);
+  });
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [rawKey, ...rest] = trimmed.split("=");
+    const code = rest.join("=").trim();
+    const account = accountByKey.get(rawKey.trim().toLowerCase());
+    if (account && code) {
+      byAccount[account.id] = code;
+    }
+  }
+  return byAccount;
+}
+
+const STATUS_TONE: Record<string, string> = {
+  Pending: "gray",
+  Queued: "blue",
+  LoggingIn: "blue",
+  FillingForm: "blue",
+  AwaitingConfirmation: "yellow",
+  AwaitingEmailCode: "yellow",
+  AwaitingManualAction: "yellow",
+  UnknownSubmissionState: "yellow",
+  AwaitingSubmitConfirmation: "yellow",
+  Submitting: "teal",
+  Running: "teal",
+  Paused: "yellow",
+  Submitted: "green",
+  Completed: "green",
+  Failed: "red",
+  Cancelled: "gray"
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const tone = STATUS_TONE[status] ?? "gray";
+  return <span className={`badge badge-${tone}`}>{status}</span>;
+}
+
+function SchemaSummary({ schema }: { schema: EplusRawFormSchema }) {
+  const payment = getOption(schema, "payment");
+  const quantity = getOption(schema, "quantity");
+  return (
+    <div className="schema-summary">
+      <div className="summary-row">
+        <span className="muted">页面类型</span>
+        <span className={schema.sourceKind === "serial-code" ? "badge badge-yellow" : "badge badge-teal"}>
+          {schema.sourceKind === "serial-code" ? "抽选码流程" : schema.sourceKind === "standard-detail" ? "普通详情页" : "未知"}
+        </span>
+        {schema.requiresManualInspection ? <span className="badge badge-yellow">需要人工检查</span> : <span className="badge badge-green">可用于创建任务</span>}
+      </div>
+      <div className="summary-grid">
+        <div>
+          <strong>{schema.applicationLinks.length}</strong>
+          <span>申込み入口</span>
+        </div>
+        <div>
+          <strong>{quantity?.values.length ?? 0}</strong>
+          <span>枚数选项</span>
+        </div>
+        <div>
+          <strong>{payment?.values.length ?? 0}</strong>
+          <span>付款方式</span>
+        </div>
+        <div>
+          <strong>{schema.serialCode.required ? "是" : "否"}</strong>
+          <span>抽选码</span>
+        </div>
+      </div>
+      {schema.applicationLinks.length ? (
+        <div className="chip-list">
+          {schema.applicationLinks.slice(0, 6).map((item) => (
+            <span key={item.id} className="chip">{item.status ? `${item.label} · ${item.status}` : item.label}</span>
+          ))}
+        </div>
+      ) : null}
+      {schema.notes.length ? (
+        <div className="note-list">
+          {schema.notes.map((note) => <div key={note}>{note}</div>)}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function RunRow(props: {
@@ -97,7 +219,7 @@ function RunRow(props: {
   return (
     <div className="run-row">
       <span>{account?.label ?? props.run.accountId}</span>
-      <span>{props.run.status}</span>
+      <span><StatusBadge status={props.run.status} /></span>
       <div className="row-actions">
         {actions.map((action) => (
           <button
@@ -128,16 +250,14 @@ export function App() {
   const [importText, setImportText] = useState("eplusEmail,password,label,tags,enabled\n");
   const [eventForm, setEventForm] = useState({
     sourceUrl: "https://www.eplus.jp/",
+    canonicalUrl: "",
     title: "",
     venue: "",
     scheduleText: "",
     applicationDeadline: "",
+    pageFingerprint: "",
     rawFormSchemaJson: JSON.stringify(
-      {
-        options: [],
-        requiresManualInspection: true,
-        notes: ["Fill these from the real Eplus page or keep as a manual draft."]
-      },
+      defaultSchema,
       null,
       2
     )
@@ -145,10 +265,12 @@ export function App() {
   const [taskForm, setTaskForm] = useState({
     eventSnapshotId: "",
     accountIds: [] as string[],
-    preference: defaultPreference
+    preference: defaultPreference,
+    perAccountSerialCodes: ""
   });
   const [message, setMessage] = useState<string>("");
   const [report, setReport] = useState<ImportReport | undefined>();
+  const [isParsingEvent, setIsParsingEvent] = useState(false);
 
   async function refresh() {
     const snapshot = await window.eplusApi.getState();
@@ -178,6 +300,12 @@ export function App() {
     () => state.events.find((item) => item.id === taskForm.eventSnapshotId) ?? state.events[0],
     [state.events, taskForm.eventSnapshotId]
   );
+  const eventFormSchema = useMemo(() => schemaFromJson(eventForm.rawFormSchemaJson), [eventForm.rawFormSchemaJson]);
+  const selectedSchema = selectedEvent?.rawFormSchema;
+  const ticketOption = getOption(selectedSchema, "ticket");
+  const paymentOption = getOption(selectedSchema, "payment");
+  const quantityOption = getOption(selectedSchema, "quantity");
+  const needsSerialCode = Boolean(selectedSchema?.serialCode.required);
 
   async function handleAddAccount() {
     const created = await window.eplusApi.addAccount({
@@ -204,13 +332,36 @@ export function App() {
     await refresh();
   }
 
+  async function handleDiscoverEvent() {
+    setIsParsingEvent(true);
+    try {
+      const discovered = await window.eplusApi.discoverEvent({ sourceUrl: eventForm.sourceUrl });
+      setEventForm((current) => ({
+        ...current,
+        ...discovered,
+        rawFormSchemaJson: discovered.rawFormSchemaJson ?? current.rawFormSchemaJson
+      }));
+      const parsedSchema = schemaFromJson(discovered.rawFormSchemaJson ?? "{}");
+      setMessage(
+        `解析完成：${discovered.title} · ${
+          parsedSchema.serialCode.required ? "需要抽选码" : "普通详情页"
+        } · ${parsedSchema.applicationLinks.length} 个申込み入口`
+      );
+    } finally {
+      setIsParsingEvent(false);
+    }
+  }
+
   async function handleCreateTask() {
     if (!selectedEvent) {
       throw new Error("请先保存一个演出快照。");
     }
     const created = await window.eplusApi.createTask({
       eventSnapshotId: selectedEvent.id,
-      preference: taskForm.preference,
+      preference: {
+        ...taskForm.preference,
+        serialCodesByAccountId: parsePerAccountCodes(taskForm.perAccountSerialCodes, state.accounts)
+      },
       accountIds: taskForm.accountIds
     });
     setMessage(`任务已创建：${created.taskId}`);
@@ -307,7 +458,7 @@ export function App() {
                     <td>{account.label}</td>
                     <td>{account.eplusEmail}</td>
                     <td>{account.mailProviderId}</td>
-                    <td>{account.enabled ? "启用" : "停用"}</td>
+                    <td><span className={account.enabled ? "badge badge-green" : "badge badge-gray"}>{account.enabled ? "启用" : "停用"}</span></td>
                     <td className="row-actions">
                       <button className="icon-button danger" onClick={() => runAction(async () => { await window.eplusApi.deleteAccount(account.id); await refresh(); })}>
                         <Trash2 size={14} />
@@ -323,7 +474,7 @@ export function App() {
         <section className="panel">
           <div className="panel-head">
             <h2><Waypoints size={16} />抽选快照</h2>
-            <span className="muted">先保存页面信息，再创建任务</span>
+            <span className="muted">粘贴 URL 后解析页面信息</span>
           </div>
           <div className="form-grid">
             <label className="full">来源 URL<input value={eventForm.sourceUrl} onChange={(e) => setEventForm({ ...eventForm, sourceUrl: e.target.value })} /></label>
@@ -333,7 +484,11 @@ export function App() {
             <label className="full">场次说明<textarea rows={3} value={eventForm.scheduleText} onChange={(e) => setEventForm({ ...eventForm, scheduleText: e.target.value })} /></label>
             <label className="full">页面结构 JSON<textarea rows={8} value={eventForm.rawFormSchemaJson} onChange={(e) => setEventForm({ ...eventForm, rawFormSchemaJson: e.target.value })} /></label>
           </div>
+          <SchemaSummary schema={eventFormSchema} />
           <div className="actions">
+            <button className="icon-button" disabled={isParsingEvent} onClick={() => runAction(handleDiscoverEvent)}>
+              <Search size={16} />{isParsingEvent ? "解析中" : "解析页面"}
+            </button>
             <button className="primary" onClick={() => runAction(handleSaveEvent)}><Plus size={16} />保存快照</button>
           </div>
         </section>
@@ -349,9 +504,41 @@ export function App() {
                 {state.events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}
               </select>
             </label>
-            <label>票档 ID<input value={taskForm.preference.entries[0]?.ticketTypeId ?? ""} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: e.target.value, rank: 1, quantity: taskForm.preference.entries[0]?.quantity ?? 1 }] } })} /></label>
-            <label>枚数<input type="number" min="1" value={taskForm.preference.entries[0]?.quantity ?? 1} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: taskForm.preference.entries[0]?.ticketTypeId ?? "", rank: 1, quantity: Number(e.target.value) }] } })} /></label>
-            <label>付款方式 ID<input value={taskForm.preference.paymentMethodId} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, paymentMethodId: e.target.value } })} /></label>
+            <label>申込み入口
+              {ticketOption ? (
+                <select value={taskForm.preference.applicationLinkId || taskForm.preference.entries[0]?.ticketTypeId || ""} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, applicationLinkId: e.target.value, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: e.target.value, rank: 1, quantity: taskForm.preference.entries[0]?.quantity ?? 1 }] } })}>
+                  <option value="">选择页面解析出的入口</option>
+                  {ticketOption.values.map((item) => <option key={item.id} value={item.id} disabled={item.disabled}>{item.label}</option>)}
+                </select>
+              ) : (
+                <input value={taskForm.preference.entries[0]?.ticketTypeId ?? ""} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: e.target.value, rank: 1, quantity: taskForm.preference.entries[0]?.quantity ?? 1 }] } })} />
+              )}
+            </label>
+            <label>枚数
+              {quantityOption ? (
+                <select value={String(taskForm.preference.entries[0]?.quantity ?? 1)} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: taskForm.preference.entries[0]?.ticketTypeId ?? "", rank: 1, quantity: Number(e.target.value) }] } })}>
+                  {quantityOption.values.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              ) : (
+                <input type="number" min="1" value={taskForm.preference.entries[0]?.quantity ?? 1} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, entries: [{ ...taskForm.preference.entries[0], ticketTypeId: taskForm.preference.entries[0]?.ticketTypeId ?? "", rank: 1, quantity: Number(e.target.value) }] } })} />
+              )}
+            </label>
+            <label>付款方式
+              {paymentOption ? (
+                <select value={taskForm.preference.paymentMethodId} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, paymentMethodId: e.target.value } })}>
+                  <option value="">选择页面解析出的付款方式</option>
+                  {paymentOption.values.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              ) : (
+                <input value={taskForm.preference.paymentMethodId} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, paymentMethodId: e.target.value } })} />
+              )}
+            </label>
+            {needsSerialCode ? (
+              <>
+                <label>公共抽选码<input value={taskForm.preference.serialCode ?? ""} onChange={(e) => setTaskForm({ ...taskForm, preference: { ...taskForm.preference, serialCode: e.target.value } })} placeholder={selectedSchema?.serialCode.placeholder ?? "シリアルナンバー"} /></label>
+                <label className="full">账号专用抽选码<textarea rows={4} value={taskForm.perAccountSerialCodes} onChange={(e) => setTaskForm({ ...taskForm, perAccountSerialCodes: e.target.value })} placeholder={"email@example.com=SERIAL-CODE\n东京场-01=SERIAL-CODE"} /></label>
+              </>
+            ) : null}
             <label className="full">账号选择
               <select multiple value={taskForm.accountIds} onChange={(e) => setTaskForm({ ...taskForm, accountIds: Array.from(e.currentTarget.selectedOptions).map((item) => item.value) })}>
                 {state.accounts.map((account) => <option key={account.id} value={account.id}>{account.label || account.eplusEmail}</option>)}
@@ -386,7 +573,7 @@ export function App() {
                   <div className="item-head">
                     <div>
                       <strong>{event?.title ?? "未找到快照"}</strong>
-                      <div className="muted">{task.status} · {task.accountIds.length} 账号</div>
+                      <div className="item-meta"><StatusBadge status={task.status} /><span className="muted">{task.accountIds.length} 账号</span></div>
                     </div>
                     <div className="row-actions">
                       {taskActions.map((action) => (

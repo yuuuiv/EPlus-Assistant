@@ -30,11 +30,20 @@ export function registerIpc(
     accountService.importAccounts(input.kind, input.text)
   );
   ipcMain.handle("account:delete", (_event, id: string) => accountService.deleteAccount(id));
+  ipcMain.handle("event:discover", (_event, input) => eventService.discoverFromUrl(input.sourceUrl));
   ipcMain.handle("event:save", (_event, input) => eventService.saveSnapshot(input));
   ipcMain.handle("task:create", (_event, input) => {
     const event = db.getEvent(input.eventSnapshotId);
     if (!event) {
       throw new Error("Event snapshot not found.");
+    }
+    if (event.rawFormSchema.serialCode?.required) {
+      const commonCode = String(input.preference.serialCode ?? "").trim();
+      const perAccountCodes = input.preference.serialCodesByAccountId ?? {};
+      const missingAccounts = input.accountIds.filter((accountId: string) => !commonCode && !perAccountCodes[accountId]);
+      if (missingAccounts.length > 0) {
+        throw new Error("该页面需要抽选码。请填写公共抽选码，或为每个选中账号填写专用抽选码。");
+      }
     }
     return taskService.createTask({ ...input, canonicalUrl: event.canonicalUrl });
   });
