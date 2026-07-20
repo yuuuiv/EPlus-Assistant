@@ -368,6 +368,97 @@ LotteryPreference
 
 这里使用站点字段 ID，而不只保存显示文本，以降低日文文案变化导致的错误提交风险。用户界面同时显示文本与限制条件。
 
+演出快照解析时，`raw_form_schema` 中的 `serialCode` 字段记录该演出页面对抽选码的要求。当前代码中的 `SerialCodeRequirement` 接口（`src/shared/types.ts:67-73`）定义如下，并为支持日别选择扩展 `availableDays` 和 `daySelectionRequired` 字段：
+
+```text
+SerialCodeRequirement
+  required: boolean
+  label: string                          # 页面显示的标签文本
+  placeholder?: string                   # 输入框占位文本
+  errorSelectors: string[]               # 错误提示的选择器列表
+  knownErrorMessages: [
+    { code: "InvalidCode" | "UsedCode"; text: string }
+  ]
+  availableDays: ("day1" | "day2")[]     # 该抽选码页面支持的日别选项
+  daySelectionRequired: boolean          # 是否必须在 day1/day2 中选择
+```
+
+`availableDays` 和 `daySelectionRequired` 由页面解析阶段（`parseEplusPage()`）从 Eplus 抽选码输入后的日别选择页面提取。
+
+- 若页面同时展示 day1 和 day2 两个日期选项（通常伴随"両日"即两日都选的选项），`availableDays` 为 `["day1", "day2"]`，`daySelectionRequired` 为 `true`。
+- 若页面仅有一个日期，`availableDays` 为 `["day1"]` 或 `["day2"]`，`daySelectionRequired` 为 `true`（仍需操作者确认）。
+- 若页面不涉及日别选择（如非 serial 抽选），`availableDays` 为空数组 `[]`，`daySelectionRequired` 为 `false`。
+
+"両日"（两天都选）不是 `availableDays` 中的独立枚举值。它表示操作者为某个账号同时勾选 day1 和 day2，对应 `selectedDays = ["day1", "day2"]`。
+
+### 5.3.1 每账号日别选择
+
+抽选偏好中的日别选择以**每账号**为粒度存储，不作为任务全局值。扩展后的 `LotteryPreference` 增加 `daySelectionByAccountId` 字段：
+
+```text
+LotteryPreference
+  entries: [
+    { rank: 1, ticket_type_id, quantity, optional_date_or_show_id }
+  ]
+  payment_method_id: string
+  delivery_method_id: string?
+  serialCode?: string
+  serialCodesByAccountId?: Record<string, string>
+  consent_flags: map<string, boolean>
+  daySelectionByAccountId?: Record<string, ("day1" | "day2")[]>
+```
+
+`daySelectionByAccountId` 是一个可选映射，key 为账号 ID，value 为该账号选择的日别列表。例如：
+
+- `{ "acc-1": ["day1"] }` — 账号 acc-1 仅选择 day1
+- `{ "acc-2": ["day1", "day2"] }` — 账号 acc-2 选择两天都参加
+- `{ "acc-3": ["day2"] }` — 账号 acc-3 仅选择 day2
+
+此字段仅在 `SerialCodeRequirement.daySelectionRequired === true` 时有意义。若演出不需要日别选择，整个 `daySelectionByAccountId` 为 `undefined` 或空对象。
+
+当 Eplus 抽选码页面要求选择 day1/day2/両日时，日别选择以每账号为粒度存储。具体机制：
+
+- 演出快照解析时，`SerialCodeRequirement` 包含 `availableDays` 字段（如 `["day1", "day2"]`）和 `daySelectionRequired: boolean`
+- 每个账号的日别选择存储在 `LotteryPreference.daySelectionByAccountId` 映射中，或作为 `AccountRun` 的扩展字段
+- 若 `availableDays` 包含多个值（如同时支持 day1 和 day2），操作者可在快照时或运行时为每个账号选择仅 day1、仅 day2、或两日都选
+
+**默认值策略**：若 `daySelectionRequired === true` 且 `availableDays` 包含多个值，在创建 `LotteryTask` 时可为所有选中账号设置一个统一的默认日别选择（如全部选择 day1），操作者在预览阶段可为单个账号覆盖此默认值。默认值不硬编码，由操作者在新建抽选向导的日别选择步骤中确认。
+
+**运行时再确认**：即使操作者在快照时预设了 `selectedDays`，引擎在进入 `DaySelection` 状态时仍会读取该账号的当前配置并执行对应勾选。操作者可在任务提交前的预览阶段覆盖单个账号的选择。
+
+### 5.3.2 DaySelection 拦截页
+
+**DaySelection 拦截页（页面状态分类器中的 `DaySelection` 状态）**：
+
+输入抽选码后，Eplus 可能展示一个日别选择页面，列出 day1、day2 或両日的选项。此页面被页面状态分类器（§4.y）识别为 `DaySelection` 状态。引擎在 `LotteryForm` 状态之前处理此状态，按账号的 `selectedDays` 配置自动选择对应选项，随后点击"进入抽选"或类似按钮，进入标准的 `LotteryForm` 抽选表单页。
+
+引擎在 `DaySelection` 状态下的交互步骤：
+
+1. 分类器返回 `DaySelection`，引擎获取当前账号在 `daySelectionByAccountId` 中的 `selectedDays`
+2. 若 `selectedDays` 包含 `"day1"`，自动勾选 day1 对应的选项控件（待核对）
+3. 若 `selectedDays` 包含 `"day2"`，自动勾选 day2 对应的选项控件（待核对）
+4. 勾选完成后，自动点击页面上的"进入抽选"或等价导航按钮（待核对）
+5. 引擎执行"再读状态"，验证已跳转至 `LotteryForm`
+
+日别选择页面上的具体 DOM 结构（各日期选项的单选/复选控件和导航按钮的精确选择器）均标记为 待核对，需在实际抽选码页面中确认后填入 `eplusPageParser.ts` 的 selectorHints。
+
+### 5.3.3 任务创建时的日别校验
+
+若演出的 `daySelectionRequired === true` 且 `availableDays` 包含多个值，在创建 `LotteryTask` 时校验每个选中账号是否已设置 `selectedDays`。若存在未选择日别的账号，拒绝创建任务并提示操作者补全。
+
+此校验规则遵循已有的抽选码必填校验模式（`src/main/ipc.ts:43-50`），在 `task:create` IPC handler 中实现：
+
+- 检查 `event.rawFormSchema.serialCode?.daySelectionRequired`，若为 `true` 则遍历 `input.accountIds` 中的每个账号
+- 对每个账号，检查 `input.preference.daySelectionByAccountId?.[accountId]` 是否存在且为非空数组
+- 若任一账号缺少 `selectedDays`，抛出错误并提示操作者补全该账号的日别选择
+- 错误信息示例：`"账号 {label} 尚未选择日别（day1/day2/両日），请在新建抽选向导中补全"`
+
+本节仅描述该规则的设计意图和校验逻辑，不对 `ipc.ts` 做具体编辑。实际实现时，此校验块应紧接现有抽选码校验逻辑（`src/main/ipc.ts:43-50`）之后。
+
+> **关联章节**：
+> - §4.y 页面状态分类器：`DaySelection` 状态的定义及其在状态匹配优先级中位于 `LotteryForm` 之前
+> - §8 流程快照决策点：day1/day2/両日的选择是抽选运行的可审计决策点，记录在 `flow-snapshot.json` 中
+
 ### 5.4 LotteryTask 与 AccountRun
 
 ```text
