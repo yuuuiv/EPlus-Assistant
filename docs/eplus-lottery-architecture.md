@@ -183,6 +183,50 @@ Eplus 的登录和抽选流程可能在任意环节弹出 CAPTCHA（reCAPTCHA/hC
 - **轮换失败后的处理**：如果 IP 轮换（通过 NetworkRotationProvider）失败或切换后的 IP 仍被标记，引擎不会以旧 IP 继续执行。流程暂停，等待操作者手动确认或调整网络环境。
 - **会话隔离**：不同账号的持久化 context 存储在不同目录（`profiles/<account-id>/`），彼此完全隔离，不存在 cookie 串扰或 session 污染的风险。
 
+## 4.y 页面状态分类器（Page-State Classifier）【规划中】
+
+页面状态分类器是引擎循环中每次"读状态"步骤调用的核心判定模块。它接收 LIVE Playwright 页面作为输入（当前 URL、DOM 结构和可见元素），输出一个状态枚举值、置信度分数和下一步操作所需的选择器提示。分类器不做任何写操作，只做判定；引擎根据判定结果决定下一步是自动填写、暂停等待人工接管还是标记任务结束。
+
+| 状态 | 枚举值 | 检测信号 | 动作 | 选择器来源 |
+|---|---|---|---|---|
+| 登录界面 | `Login` | URL 匹配 `/login`，或页面包含登录表单（邮箱 + 密码双输入框） | 自动填写邮箱密码，点击登录按钮 | `loginButton`: `#login-bt a, #login, a:has-text('ログイン画面へ')` — 来自 `eplusPageParser.ts` selectorHints |
+| 验证码输入 | `EmailCode` | 页面出现 "認証コード"/"確認コード" 文本，或出现验证码输入框 | 调用 Verification Service 获取验证码并自动填入，或暂停等待人工输入 | 待核对 — 需实际登录后观察验证码输入页的 DOM 结构 |
+| 人机验证 | `CaptchaSliderDevice` | 页面出现 reCAPTCHA/hCaptcha iframe，或滑块验证组件，或 "電話番号認証が必要" 文本 | **人工接管，永不自动解决**。引擎暂停，浏览器保持有头模式，操作者手动完成验证 | `電話番号認証が必要` 文本检测来自 `eplusPageParser.ts` notes（line 298）。具体 captcha/滑块 iframe 选择器待核对 |
+| 粉色按钮/确认拦截 | `InterstitialConsent` | 页面出现粉色按钮，文本为 "次へ"、"OK"、"確認"、"同意して申込み" 等 | 自动点击匹配到的粉色/确认按钮继续流程 | `cautionNextButton`（`button[data-title='★ 必ずお読みください ★']`）和 `finalConsentButton`（`#apply-button-area a:has-text('同意して申込み')`）来自 `eplusPageParser.ts` selectorHints。"OK"/"確認" 的具体选择器待核对 |
+| 勾选同意 | `CheckboxGate` | 页面要求勾选同意条款或选择席位种类（需勾选 checkbox/radio） | 自动勾选所有必选 checkbox，然后点击下一步 | 待核对 — 当前代码中无任何 checkbox 选择器，需在真实页面中确认选择器 |
+| 标准抽选表单 | `LotteryForm` | 页面包含票档选择、枚数选择、希望顺位和付款方式选择等标准表单元素 | 按照 `LotteryPreference` 自动填写表单选项 | 表单字段结构由 `parseEplusPage()` 从页面快照解析（option kind + values），选择器来源为解析后的字段 ID |
+| 日别选择 | `DaySelection` | 页面出现 "day1"/"day2"/"両日" 或对应日文日期选择界面 | 按账号的 `selectedDays` 配置自动选择，支持 day1/day2/两天 | 待核对 — 具体日别选择器的 DOM 结构需在实际抽选码页面中确认 |
+| 回执/完成 | `Receipt` | 页面出现 "受付番号"、"申込完了" 或类似完成文本 | 提取受付番号，保存回执截图与快照，标记 AccountRun 为 `Submitted` | 待核对 — 需在实际提交后观察回执页的 DOM 结构 |
+| 受付終了 | `ReceptionClosed` | 页面显示 "受付は終了" | 标记当前演出不可申请，任务结束 | "受付は終了" 文本检测来自 `eplusPageParser.ts` notes（line 301） |
+| 未知状态 | `Unknown` | 页面结构不符合以上任何已知模式 | 暂停并标记为需人工检查 | — |
+
+### 状态匹配优先级
+
+分类器按固定顺序依次匹配状态，一旦命中即停止。匹配顺序设计为：先检测终止条件（`ReceptionClosed`、`CaptchaSliderDevice`），再检测需人工交互的拦截页面（`InterstitialConsent`、`CheckboxGate`），然后检测关键流程节点（`Login`、`EmailCode`、`LotteryForm`、`DaySelection`、`Receipt`），最后 fallback 到 `Unknown`。这一顺序确保高风险状态（如人机验证、受付終了）不会因被后匹配的通用状态覆盖而漏报。
+
+### 状态转换路径
+
+分类器状态之间可相互转换。以下是典型转换路径：
+
+- **主路径**：`Login` → `EmailCode` → `InterstitialConsent` → `CheckboxGate` → `LotteryForm` → `DaySelection` → `Receipt`
+- **分支路径**：任一状态均可跳转至 `CaptchaSliderDevice`（触发人机验证）或 `Unknown`（页面结构变化）。
+
+实际执行中，同一轮"读状态"可能经历多次状态转换，直到到达终止状态（`Receipt`、`ReceptionClosed`、`CaptchaSliderDevice`、`Unknown`）。
+
+### 分类器状态到 AccountRun 状态的映射
+
+分类器输出的是页面级判定，引擎需将其转换为任务级 `AccountRun` 状态：
+
+| 分类器状态 | AccountRun 状态 |
+|---|---|
+| `Login` / `EmailCode` | `LoggingIn` / `AwaitingEmailCode` |
+| `CaptchaSliderDevice` | `AwaitingManualAction`（人工接管） |
+| `InterstitialConsent` / `CheckboxGate` | `FillingForm`（自动处理） |
+| `LotteryForm` / `DaySelection` | `FillingForm` |
+| `Receipt` | `Submitted` |
+| `ReceptionClosed` | `Failed` |
+| `Unknown` | `AwaitingManualAction` |
+
 ## 5. 核心领域模型
 
 ### 5.1 Account
