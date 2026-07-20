@@ -66,26 +66,40 @@
 ## 4. 总体架构
 
 ```text
-Tauri/React 桌面界面
-    |-- 账号管理、Excel 导入、任务创建、人工接管、结果查看
+Electron 渲染进程 (Renderer) — React UI
+    ├── 账号管理终端
+    ├── 账号详情
+    ├── 新建抽选
+    └── 设置 + IP 管理
+    |
+    | contextBridge IPC
     v
-应用服务层
-    |-- Task Orchestrator       抽选任务编排及状态机
-    |-- Account Service         账号、分组、加密凭据管理
-    |-- Event Service           URL 校验、演出与申请表单发现
-    |-- Verification Service    邮箱验证码轮询及人工验证协调
-    |-- Audit Service           脱敏日志、截图、结果归档
+Electron 主进程 (Main) — 应用服务层
+    ├── Task Orchestrator           抽选任务编排及状态机
+    ├── Account Service             账号、分组、加密凭据管理
+    ├── Event/Flow Service          URL 校验、演出与申请表单发现
+    ├── Verification Service        邮箱验证码轮询及人工验证协调
+    ├── Audit Service               脱敏日志、截图、结果归档
+    ├── Profile Harvester Service   档案/同行者/申请记录采集【规划中】
+    └── Network Rotation Service    IP 轮换协调【规划中】
+    |
     v
-适配器层
-    |-- Eplus Browser Adapter   Playwright 页面操作和页面模型解析
-    |-- Mail Provider Adapter   temp-mail/auth API 封装
-    |-- Secret Store Adapter    Windows Credential Manager / DPAPI
+适配器层 (Adapters)
+    ├── Live Browser Session Engine + 页面状态分类器【规划中】
+    │                               Playwright 持久化 context + read→decide→act 循环
+    ├── Mail Provider               邮箱验证码适配器
+    ├── NetworkRotationProvider     Clash 外部控制器【规划中】
+    └── Secret Store                safeStorage 密钥封装
+    |
     v
-本地数据层
-    |-- SQLite: 账号元数据、任务、步骤、结果、审计索引
-    |-- 加密凭据库: 邮箱密码、邮箱服务访问令牌
-    |-- artifacts/: 截图、HTML 快照、脱敏错误证据
+本地数据层 (Local Data)
+    ├── sql.js DB (accounts / profiles / records / tasks / runs / audit)
+    ├── 加密凭据 (safeStorage)
+    ├── artifacts/ (截图、HTML 快照、脱敏证据)
+    └── profiles/<account-id>/ (per-account Playwright 持久化 context)
 ```
+
+当前已实现的服务：Account Service、Event Service、Task Service、Settings Service（对应图中未标「规划中」的服务层模块）。Live Browser Session Engine、Page-State Classifier、Profile Harvester Service、Network Rotation Service 和 NetworkRotationProvider 为规划中的新增子系统。
 
 ## 5. 核心领域模型
 
