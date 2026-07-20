@@ -1,0 +1,55 @@
+import path from "node:path";
+import { shell, ipcMain, type BrowserWindow } from "electron";
+import type { AppDatabase } from "./storage/database.js";
+import type { SecretStore } from "./storage/secretStore.js";
+import { AccountService } from "./services/accountService.js";
+import { EventService } from "./services/eventService.js";
+import { TaskService } from "./services/taskService.js";
+import type { ImportAccountsInput } from "../shared/ipc.js";
+
+export function registerIpc(
+  window: BrowserWindow,
+  db: AppDatabase,
+  secretStore: SecretStore
+): void {
+  const accountService = new AccountService(db, secretStore);
+  const eventService = new EventService(db);
+  const taskService = new TaskService(db);
+
+  ipcMain.handle("app:get-state", () => ({
+    accounts: accountService.listAccounts(),
+    events: eventService.listEvents(),
+    tasks: taskService.listTasks(),
+    runs: taskService.listRuns(),
+    logs: db.listLogs(),
+    dataDir: db.getDataDir()
+  }));
+
+  ipcMain.handle("account:add", (_event, input) => accountService.addAccount(input));
+  ipcMain.handle("account:import", (_event, input: ImportAccountsInput) =>
+    accountService.importAccounts(input.kind, input.text)
+  );
+  ipcMain.handle("account:delete", (_event, id: string) => accountService.deleteAccount(id));
+  ipcMain.handle("event:save", (_event, input) => eventService.saveSnapshot(input));
+  ipcMain.handle("task:create", (_event, input) => {
+    const event = db.getEvent(input.eventSnapshotId);
+    if (!event) {
+      throw new Error("Event snapshot not found.");
+    }
+    return taskService.createTask({ ...input, canonicalUrl: event.canonicalUrl });
+  });
+  ipcMain.handle("task:update-status", (_event, taskId: string, status: string) =>
+    taskService.updateTaskStatus(taskId, status as any)
+  );
+  ipcMain.handle("run:update-status", (_event, runId: string, status: string, note?: string) =>
+    taskService.updateRunStatus(runId, status as any, note)
+  );
+  ipcMain.handle("log:add", (_event, message: string, level = "info", metadata = {}) =>
+    db.addLog({ message, level, metadata })
+  );
+  ipcMain.handle("app:open-data-folder", () => shell.openPath(path.resolve(db.getDataDir())));
+
+  window.webContents.once("did-finish-load", () => {
+    db.addLog({ level: "info", message: "Renderer loaded.", metadata: {} });
+  });
+}

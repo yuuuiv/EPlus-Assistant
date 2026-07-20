@@ -1,0 +1,52 @@
+# Eplus Lottery Assistant
+
+Local-first desktop workbench for managing Eplus lottery accounts, event snapshots, task state, and audit evidence.
+
+## Run
+
+```powershell
+npm install
+npm run dev
+```
+
+`npm run dev` clears `ELECTRON_RUN_AS_NODE` before launching Electron because this shell may set it globally.
+
+For a built local run:
+
+```powershell
+npm start
+```
+
+## Account Input
+
+Accounts can be added explicitly in the UI, or imported as CSV/JSON.
+
+CSV headers:
+
+```csv
+eplusEmail,password,label,tags,enabled,mailProviderId,mailConfig
+user@example.com,secret,Tokyo-01,"tokyo,day1",true,manual,{}
+```
+
+JSON format:
+
+```json
+[
+  {
+    "eplusEmail": "user@example.com",
+    "password": "secret",
+    "label": "Tokyo-01",
+    "tags": ["tokyo", "day1"],
+    "enabled": true,
+    "mailProviderId": "manual",
+    "mailConfig": {}
+  }
+]
+```
+
+Passwords and mail config are encrypted with Electron `safeStorage` before writing to `data/app.db`.
+
+## Current Boundary
+
+The MVP implements account management, CSV/JSON import, event snapshots, task creation, conservative task/run state transitions, local SQLite persistence, redacted logs, and adapter interfaces. The live Eplus browser adapter and concrete mail-provider integrations are still isolated behind interfaces and intentionally do not submit real lotteries yet.
+

@@ -1,0 +1,36 @@
+{
+  "name": "eplus-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Eplus lottery workflow assistant",
+  "main": "dist-electron/main/main.js",
+  "scripts": {
+    "dev": "npm run build:main && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && set ELECTRON_RUN_AS_NODE=&& electron .\"",
+    "start": "npm run build && set ELECTRON_RUN_AS_NODE=&& set EPLUS_ASSISTANT_LOAD_DIST=1&& electron .",
+    "build": "npm run build:main && vite build",
+    "build:main": "tsc -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "electron": "^40.10.6",
+    "lucide-react": "^0.546.0",
+    "playwright-core": "^1.56.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sql.js": "^1.13.0",
+    "vite": "^7.1.9",
+    "wait-on": "^9.0.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/sql.js": "^1.4.11",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

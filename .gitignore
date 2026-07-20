@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-electron/
+out/
+*.log
+
+# Runtime data: never commit credentials, browser sessions, local DB, or evidence.
+data/
+profiles/
+artifacts/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local automation/cache files
+.codegraph/
+.omo/
+.vite/
+.DS_Store
+Thumbs.db
+
