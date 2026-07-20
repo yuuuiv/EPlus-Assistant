@@ -229,6 +229,20 @@ Eplus 的登录和抽选流程可能在任意环节弹出 CAPTCHA（reCAPTCHA/hC
 
 ## 5. 核心领域模型
 
+### 5.0 领域模型总览
+
+以下列出本系统涉及的全部领域实体及其当前状态：
+
+- **Account**（已有）—— 账号基本凭据与邮件配置，详见 §5.1
+- **AccountProfile**（规划中）—— 账号档案，采集自 Eplus 会員情報，详见 §5.1.1
+- **Companion**（规划中）—— 同行者记录，分为当前绑定与曾绑定，详见 §5.1.1
+- **EventSnapshot**（已有）—— 演出快照，包含页面解析结果与表单选项，详见 §5.2
+- **LotteryPreference**（已有，已扩展 `daySelectionByAccountId`）—— 抽选偏好，支持每账号日别选择，详见 §5.3
+- **LotteryTask / AccountRun**（已有，已扩展 `selectedDays` per-account）—— 抽选任务与单账号运行状态，详见 §5.4
+- **ApplicationRecord**（规划中）—— 历史申请记录，由档案采集运行自动采集，详见 §6.y
+- **LotteryResultRecord**（规划中）—— 中落选结果记录，通过手动刷新获取，详见 §6.y
+- **ProfileHarvestRun**（规划中）—— 档案采集运行生命周期，复用浏览器会话引擎，详见 §5.1.2
+
 ### 5.1 Account
 
 ```text
@@ -782,6 +796,8 @@ readReceipt()                → 引擎读取回执页（Receipt 状态）
 
 ## 9. 任务状态机与人工接管
 
+### 任务状态机
+
 ```text
 Draft -> AwaitingConfirmation -> Queued -> Running
 Running -> AwaitingEmailCode -> FillingForm -> AwaitingSubmitConfirmation
@@ -791,7 +807,67 @@ Running/* -> Failed | Cancelled
 Submitting -> UnknownSubmissionState -> Submitted | Failed
 ```
 
-人工接管触发条件：CAPTCHA、异常安全验证、站点提示不支持的页面、验证码歧义、付款相关二次确认、页面字段与快照不一致。界面应显示当前账号、原因、浏览器窗口状态和“继续/取消此账号/取消整个任务”操作。
+### AccountRun 状态流
+
+AccountRun 是抽选任务中每个账号的运行实例，状态定义见 §5.4。单次 AccountRun 的典型状态转换路径：
+
+```text
+Pending → LoggingIn → AwaitingEmailCode → FillingForm → AwaitingSubmitConfirmation → Submitting → Submitted
+                  ↘ AwaitingManualAction → FillingForm
+                  ↘ Failed
+```
+
+引擎在 `FillingForm` 阶段按页面状态分类器（§4.y）返回的判定逐页处理，包括日别选择（`DaySelection`）、拦截页（`InterstitialConsent`、`CheckboxGate`）自动点击/勾选，以及 `LotteryForm` 表单填写。
+
+### ProfileHarvestRun 状态流
+
+`ProfileHarvestRun`（§5.1.2，规划中）的独立状态流：
+
+```text
+Pending → LoggingIn → AwaitingEmailCode → Extracting → Completed
+                ↘ AwaitingManualAction → Extracting
+                ↘ Failed
+```
+
+`ProfileHarvestRun` 与 `AccountRun` 共用同一浏览器会话引擎（§4.x）和页面状态分类器（§4.y）。触发时机为每次成功登录后自动执行（详见 §6.x）：登录完成后引擎自动启动一次档案采集运行，依次遍历会員情報、同行者管理和申込履歴等页面，提取各字段后写入本地数据库。
+
+### 分类器状态到运行状态的映射
+
+页面状态分类器（§4.y）输出的页面级判定需转换为任务级运行状态。以下为完整的映射关系：
+
+| 分类器状态 | AccountRun 状态 | 说明 |
+|---|---|---|
+| `Login` / `EmailCode` | `LoggingIn` / `AwaitingEmailCode` | 登录与会话建立 |
+| `DaySelection` | `FillingForm` | 按账号的 `selectedDays`（day1/day2/両日）自动勾选 |
+| `InterstitialConsent` | `FillingForm` | 自动点击粉色/确认按钮继续流程 |
+| `CheckboxGate` | `FillingForm` | 自动勾选必选 checkbox |
+| `LotteryForm` | `FillingForm` | 按 `LotteryPreference` 填写票档、枚数、顺位、付款方式 |
+| `Receipt` | `Submitted` | 提取受付番号，标记完成 |
+| `CaptchaSliderDevice` | `AwaitingManualAction` | 人工接管，不自动解决 |
+| `ReceptionClosed` | `Failed` | 演出受付已结束 |
+| `Unknown` | `AwaitingManualAction` | 页面结构不可识别 |
+
+`ProfileHarvestRun` 的 `Extracting` 阶段内部同样依赖分类器，但其映射较为简单：分类器仅用于判断当前页面是否为可提取页面（会員情報、同行者、申込履歴），不涉及表单填写。若分类器返回 `CaptchaSliderDevice` 或 `Unknown`，`ProfileHarvestRun` 同样进入 `AwaitingManualAction`。
+
+### IP 轮换前置步骤
+
+IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置步骤，执行时机为引擎创建浏览器会话之前：
+
+```text
+每个 AccountRun 执行前：
+  1. NetworkRotationProvider.rotate() → 切换至下一个代理节点
+  2. NetworkRotationProvider.detectIp() → 通过 ip-api.com 验证新 IP 的归属地
+  3. 若 rotate 或 detectIp 失败 → 暂停运行，不继续使用旧 IP，AccountRun 进入 AwaitingManualAction
+  4. 验证通过 → 开始执行抽选/采集流程
+```
+
+这是“一抽一号”策略的实现入口。每个账号运行前完成 IP 切换与验证后，才启动浏览器会话引擎的会话探测与后续流程。失败时引擎绝不使用未经验证或复用旧 IP 继续执行。
+
+### 人工接管触发条件
+
+人工接管触发条件：CAPTCHA、滑块验证、设备验证、电话认证、异常安全验证、站点提示不支持的页面、验证码歧义（共享邮箱多账号匹配失败）、付款二次确认（card/CVV 输入）、页面字段与快照不一致、IP 轮换失败或切换后无法验证新 IP。
+
+界面应显示当前账号、原因、浏览器窗口状态和“继续/取消此账号/取消整个任务”操作。
 
 ## 10. 用户界面流程
 
@@ -1019,3 +1095,4 @@ eplus-assistant/
 - Eplus 登录与抽选页面的真实 HTML、验证码邮件格式、页面语言与付款方式差异。
 - 希望顺位是否需要支持多个场次/日期组合，以及每场的账号申请限制。
 - 最终提交策略：每个账号人工确认，还是在总览确认后由程序依次提交。
+
