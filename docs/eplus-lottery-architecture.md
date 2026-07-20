@@ -727,6 +727,133 @@ Submitting -> UnknownSubmissionState -> Submitted | Failed
 - `artifacts/` 文件设置访问限制并可从 UI 一键清理；默认保留 30 天。
 - 禁止将 profile、数据库、截图或日志提交到 Git；提供 `.gitignore` 模板。
 
+## 11.x 网络层 / IP 轮换（Network Rotation）【规划中】
+
+网络层负责在多个账号串行运行时为每个账号提供独立的出口 IP。它的唯一目的是账号隔离：不同账号从不同 IP 发起请求，避免 Eplus 将多个账号关联为同一操作者。这并非用于绕过站点安全机制、频率限制或 CAPTCHA。
+
+当前选型为通过 Clash Verge 的外部控制器 API 切换代理节点，并用 ip-api.com 验证切换后的出口 IP 归属地。此子系统尚无任何代码实现，全部标记为规划中。
+
+### 11.x.1 NetworkRotationProvider 接口
+
+```ts
+interface NetworkRotationProvider {
+  /** 检测当前出口 IP 及其归属地 */
+  detectIp(): Promise<{
+    ip: string;
+    region: string;   // 省份/州
+    country: string;  // 国家
+    city?: string;    // 城市（可选）
+  }>;
+
+  /** 切换到下一个 IP 节点 */
+  rotate(): Promise<void>;
+
+  /** 列出可用节点（可选实现，用于 UI 展示） */
+  listNodes?(): Promise<NodeInfo[]>;
+}
+
+interface NodeInfo {
+  name: string;
+  type: string;       // 节点类型（如 Shadowsocks、VMess、Trojan）
+  alive: boolean;     // 节点是否存活
+  delay?: number;     // 延迟（ms）
+}
+```
+
+`detectIp` 是旋转后的验证手段，`rotate` 是节点切换动作。两者在每次账号运行前组合调用：先 rotate，再 detectIp 验证。`listNodes` 为可选接口，仅在 UI 需要展示可用节点列表时使用。
+
+### 11.x.2 Clash 控制器实现（ClashControllerProvider）
+
+第一实现基于 Clash Verge 的外部控制器（external controller）REST API。Clash Verge 启动后默认在 `127.0.0.1:9090` 暴露一个 HTTP 控制接口，允许外部程序查询和切换代理节点。
+
+**前提条件**：
+
+- Clash Verge 已启动且外部控制器已开启（需操作者确认）
+- 已配置一个或多个代理组（proxy-group），代理组内包含多个可用节点
+- 客户端可访问控制器 HTTP API
+
+**配置字段**（值取决于运行环境，标记为「待核对」）：
+
+| 配置项 | 说明 | 默认值 |
+|---|---|---|
+| `host` | 控制器地址 | `127.0.0.1`（待核对） |
+| `port` | 控制器端口 | `9090`（待核对） |
+| `secret` | 控制器密钥 | 由操作者提供（待核对） |
+| `proxyGroup` | 代理组名称 | 由操作者提供（待核对） |
+
+四个字段均为必填，缺少任一字段时 `ClashControllerProvider` 初始化失败。机制已固定，但具体取值取决于操作者的 Clash 配置，因此均标注为待核对。
+
+**rotate() 实现流程**：
+
+1. 调用 `GET /proxies/{proxyGroup}` 获取代理组的当前状态和节点列表。请求头携带 `Authorization: Bearer {secret}`。
+2. 从返回的 `all` 数组中提取所有可用节点名称，与 `now` 字段比对确定当前活跃节点。
+3. 在节点列表中按 round-robin 规则选择「下一个节点」：若当前节点为列表中的第 N 个，目标为第 N+1 个；若当前为最后一个，目标回到第一个。
+4. 调用 `PUT /proxies/{proxyGroup}` 将选择切换至目标节点，请求体为 `{ "name": "<目标节点>" }`。
+5. 切换完成后立即调用 `detectIp()` 验证新 IP 已生效。
+
+**detectIp() 实现**：
+
+调用 ip-api.com 免费 API，无需 token：
+
+```
+GET http://ip-api.com/json/?fields=query,country,regionName,city
+```
+
+返回示例：
+
+```json
+{
+  "query": "203.0.113.45",
+  "country": "Japan",
+  "regionName": "Tokyo",
+  "city": "Shinjuku"
+}
+```
+
+免费层限制为 45 req/min，串行运行场景下远低于此阈值。
+
+> **隐私注意**：此调用向 ip-api.com（第三方服务）披露当前出口 IP 地址，存在隐私泄露风险。操作者应知晓此风险。ip-api.com 端点可配置替换为自建服务，但替换需操作者自行完成。详见 §11 数据安全与隐私章节。
+
+### 11.x.3 轮换策略
+
+**一抽一号**：每个账号的每次抽选运行前，必须执行一次完整的 rotate → verify 流程。不允许跳过，不允许复用上一个账号的 IP。
+
+**严格串行**：Clash 外部控制器同一时间只能选择一个全局活跃节点。这意味着无论应用如何设计，所有经过 Clash 的流量始终共享同一个出口 IP。账号任务必须串行执行的根本原因正在于此：并行运行会导致多个账号使用同一 IP，失去隔离效果。
+
+**前置验证**：`rotate()` 完成后立即调用 `detectIp()` 验证新 IP 的归属地。验证结果记录到运行日志。若出现以下任一情况，暂停当前运行：
+
+- 轮换失败（API 调用异常、节点不可用、代理组为空）
+- 验证失败（detectIp 调用异常）
+- IP 归属地与预期不符（如预期日本 IP 但实际为其他国家）
+
+暂停时将 `AccountRun` 标记为 `AwaitingManualAction`，**不以旧 IP 继续执行**。操作者需手动检查 Clash 状态或网络环境，确认后恢复。
+
+**不规避安全**：IP 轮换的目的始终限定为账号隔离（不同账号使用不同 IP 以防关联风控）。以下行为属于非目标：
+
+- 用 IP 轮换规避 Eplus 的访问频率限制
+- 用 IP 轮换绕过 reCAPTCHA 或其他人机验证
+- 用 IP 轮换突破地域限制访问仅限日本的内容
+- 在单次抽选运行中途切换 IP
+
+### 11.x.4 UI 与操作界面
+
+**设置页**：
+
+- **「检测 IP（显示地区）」按钮**：调用 `detectIp()` 并展示当前出口 IP 的归属地（国家、省份、城市）。结果以卡片形式呈现，包含 IP 地址（完整显示）和地区信息。此按钮不触发节点切换，仅做查询。
+- **「切换 IP」按钮**：调用 `rotate()` 并展示切换前后的 IP 和地区对比。切换前记录当前 IP，切换后再次检测，差异以 A → B 的对比形式展示。切换失败时显示错误描述。
+- **节点列表（若 `listNodes` 已实现）**：展示 Clash 代理组中的可用节点，标注当前活跃节点和延迟信息。
+
+**运行中状态**：每个 `AccountRun` 的执行面板中显示当前使用的 IP 和归属地。信息在 rotate → verify 完成后更新，保持与运行同步。
+
+**轮换日志**：每次 rotate → verify 的结果记录至 Audit Log。日志中的 IP 字段脱敏处理：仅显示前两段和归属地，如 `203.0.***.*** (Tokyo, Japan)`。完整的未脱敏 IP 不进入任何日志文件。
+
+### 11.x.5 非目标
+
+- 不提供内置的代理节点获取功能。节点由操作者自行在 Clash 中配置和管理。
+- IP 检测服务（ip-api.com）不在应用内提供替代方案。操作者如需替换端点，需修改配置或代码。
+- 不实现多代理后端支持。第一版仅对接 Clash 外部控制器；后续可按 `NetworkRotationProvider` 接口扩展其他代理后端。
+- 不检测 IP 是否被 Eplus 标记或封禁。此判断属于业务层而非网络层的职责。
+
 ## 12. 错误处理与恢复
 
 | 情况 | 处理 |
