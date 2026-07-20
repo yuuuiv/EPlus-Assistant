@@ -248,6 +248,94 @@ Account
 
 账号密码和邮件服务访问凭据均以每台机器独有的主密钥加密；导出时默认不含密码，需要用户输入导出密码才可生成加密备份。
 
+### 5.1.1 AccountProfile
+
+`AccountProfile` 是与 `Account` 一对一关联的档案实体。每个账号可零个或一个档案记录，在首次成功登录后由档案采集运行（`ProfileHarvestRun`）自动填充。
+
+```text
+AccountProfile
+  accountId: UUID              # 1:1 关联至 Account
+  eplusEmail: string           # 账号绑定的 Eplus 邮箱
+  encryptedPassword: bytes     # Eplus 登录密码（safeStorage 加密）；支持按需 reveal
+  revealSupported: boolean     # 站点是否支持"点击显示密码"功能
+  phone: string?               # 绑定手机号（脱敏）
+  name: string?                # 姓名（可在会員情報中获取）
+  gender: string?              # 性别
+  birthday: string?            # 生年月日
+  address: string?             # 地址（可在会員情報中获取）
+  companions: Companion[]      # 当前绑定的同行者
+  pastCompanions: Companion[]  # 曾绑定但已解绑的同行者
+  harvestedAt: datetime        # 最近一次采集时间
+  harvestStatus: enum          # Pending | Ok | Partial | Failed
+```
+
+`harvestStatus` 含义：
+
+| 值 | 含义 |
+| --- | --- |
+| `Pending` | 尚未执行过档案采集 |
+| `Ok` | 本次采集成功，所有已知字段均已获取 |
+| `Partial` | 部分字段获取成功（如邮箱、姓名获取成功，但同行者页面加载失败） |
+| `Failed` | 采集完全失败（如登录后会话过期、页面结构不可识别） |
+
+#### Companion
+
+同行者（Companion）记录账号在 Eplus 站点上绑定的同行者信息，分为当前绑定和曾绑定两类。
+
+```text
+Companion
+  name: string                 # 同行者姓名
+  relationship?: string        # 关系（如 "友人"、"家族"）
+  memberId?: string            # Eplus 会員 ID（如有）
+  boundAt?: datetime           # 绑定时间
+  unboundAt?: datetime         # 解绑时间（仅 pastCompanions）
+```
+
+> 同行者为**只读展示数据**。采集后显示在账号详情 UI 中供操作者参考，但不在抽选申请中自动分配或选择。同行者不属于 `LotteryPreference` 的可操作字段。同行者的绑定/解绑操作需操作者自行在 Eplus 站点上完成。
+
+#### 档案数据来源说明
+
+> **待核对** — 以上所有档案字段的来源均为需要登录后才能访问的 Eplus 会員ページ（My 页面、会員情報、同行者管理）。这些页面的确切 URL、DOM 结构、选择器和具体的数据提取路径目前均未知，文档中以 `待核对` 标记。实现者应在开发时通过 Eplus 帮助文档（ヘルプ）及首页/会員メニュー导航定位这些页面。
+>
+> **当前代码中的 `Account` 类型（`src/shared/types.ts:27-38`）不包含任何档案字段**，本节描述的 `AccountProfile` 及 `Companion` 均为规划中的新增实体，将在后续实现阶段新增独立的 `account_profiles` 和 `companions` 数据库表。
+
+#### 加密与脱敏规则
+
+档案中多个字段包含个人身份信息（PII），存储和日志输出须遵守以下规则：
+
+- 密码字段 `encryptedPassword` 使用 Electron `safeStorage` 加密存储，永不写入日志或数据库明文列。
+- `revealSupported` 标记站点是否提供"显示密码"功能；若支持，采集时可自动获取明文密码；否则标记为 `revealSupported: false`，密码字段仅加密存储。
+- 明文密码仅在操作者主动点击"显示密码"时解密并在界面中短暂展示，不复制到剪贴板，不进入日志。
+- 手机号以脱敏形式存储（如 `080****1234`），日志中完全替换为 `[PHONE]`。
+- 姓名、性别、生年月日、地址等 PII 在日志中按字段级脱敏：姓名显示首字 + `*`（如 `张*`），其余字段替换为字段名标签（如 `[GENDER]`、`[BIRTHDAY]`、`[ADDRESS]`）。
+- 同行者姓名同样适用姓名脱敏规则；`memberId` 和 `relationship` 保留完整值，不属于 PII 脱敏范围。
+
+### 5.1.2 ProfileHarvestRun
+
+`ProfileHarvestRun` 记录单次档案采集运行的生命周期。一次运行从登录成功后的页面遍历开始，到所有目标字段读取完成（或失败暂停）结束。
+
+```text
+ProfileHarvestRun
+  id: UUID
+  accountId: UUID
+  status: enum
+    Pending               # 等待执行
+    LoggingIn             # 正在登录（复用已有会话或触发新登录）
+    AwaitingEmailCode     # 等待邮箱验证码（登录阶段触发）
+    AwaitingManualAction  # 等待人工接管（CAPTCHA、滑块等）
+    Extracting            # 正在遍历页面并提取档案字段
+    Completed             # 采集完成
+    Failed                # 采集失败（会话过期、页面不可识别等）
+  harvestedFields: string[]     # 本次成功采集的字段列表
+  errorDetail?: string          # 脱敏后的错误描述
+  startedAt: datetime
+  completedAt: datetime?
+```
+
+`ProfileHarvestRun` 复用浏览器会话引擎（§4.x）和页面状态分类器（§4.y），其状态到引擎循环的映射与 `AccountRun` 类似：`LoggingIn` / `AwaitingEmailCode` 委托引擎执行登录流程，`Extracting` 委托引擎按预定义页面顺序读取各档案字段，`AwaitingManualAction` 暂停并通知操作者接管。
+
+> 档案采集运行的流程快照仅记录访问过的页面状态序列，不记录决策点（详见 §8 流程快照章节中关于档案采集与抽选运行的决策点差异说明）。
+
 ### 5.2 EventSnapshot
 
 ```text
