@@ -22,11 +22,11 @@
 
 | 需求 | 对应章节 |
 | --- | --- |
-| 页面状态检测（登录/验证码/CAPTCHA/粉色按钮/勾选） | 待定 |
-| 多账号管理终端（档案/同行者/申请记录/中落选记录+筛选） | 待定 |
-| 邮箱验证码源（cerise-bouquet + Cloudflare + 手动） | 待定 |
-| 每账号 IP 轮换（Clash 控制器 + ip-api 检测 + 切换按钮） | 待定 |
-| 抽选码日别选择（day1/day2/两天） | 待定 |
+| 页面状态检测（登录/验证码/CAPTCHA/粉色按钮/勾选） | §6 页面状态分类器 |
+| 多账号管理终端（档案/同行者/申请记录/中落选记录+筛选） | §7 核心领域模型、§9 档案采集、§10 申请记录与中落选结果 |
+| 邮箱验证码源（cerise-bouquet + Cloudflare + 手动） | §11 邮箱验证码架构 |
+| 每账号 IP 轮换（Clash 控制器 + ip-api 检测 + 切换按钮） | §15 网络层 / IP 轮换 |
+| 抽选码日别选择（day1/day2/两天） | §7.3 LotteryPreference、§12 Eplus 浏览器适配器 |
 
 ### 非目标
 
@@ -101,7 +101,7 @@ Electron 主进程 (Main) — 应用服务层
 
 当前已实现的服务：Account Service、Event Service、Task Service、Settings Service（对应图中未标「规划中」的服务层模块）。Live Browser Session Engine、Page-State Classifier、Profile Harvester Service、Network Rotation Service 和 NetworkRotationProvider 为规划中的新增子系统。
 
-## 4.x 浏览器会话引擎（Live Browser Session Engine）【规划中】
+## 5. 浏览器会话引擎（Live Browser Session Engine）【规划中】
 
 ### 引擎总览
 
@@ -183,7 +183,7 @@ Eplus 的登录和抽选流程可能在任意环节弹出 CAPTCHA（reCAPTCHA/hC
 - **轮换失败后的处理**：如果 IP 轮换（通过 NetworkRotationProvider）失败或切换后的 IP 仍被标记，引擎不会以旧 IP 继续执行。流程暂停，等待操作者手动确认或调整网络环境。
 - **会话隔离**：不同账号的持久化 context 存储在不同目录（`profiles/<account-id>/`），彼此完全隔离，不存在 cookie 串扰或 session 污染的风险。
 
-## 4.y 页面状态分类器（Page-State Classifier）【规划中】
+## 6. 页面状态分类器（Page-State Classifier）【规划中】
 
 页面状态分类器是引擎循环中每次"读状态"步骤调用的核心判定模块。它接收 LIVE Playwright 页面作为输入（当前 URL、DOM 结构和可见元素），输出一个状态枚举值、置信度分数和下一步操作所需的选择器提示。分类器不做任何写操作，只做判定；引擎根据判定结果决定下一步是自动填写、暂停等待人工接管还是标记任务结束。
 
@@ -227,23 +227,23 @@ Eplus 的登录和抽选流程可能在任意环节弹出 CAPTCHA（reCAPTCHA/hC
 | `ReceptionClosed` | `Failed` |
 | `Unknown` | `AwaitingManualAction` |
 
-## 5. 核心领域模型
+## 7. 核心领域模型
 
-### 5.0 领域模型总览
+### 7.0 领域模型总览
 
 以下列出本系统涉及的全部领域实体及其当前状态：
 
-- **Account**（已有）—— 账号基本凭据与邮件配置，详见 §5.1
-- **AccountProfile**（规划中）—— 账号档案，采集自 Eplus 会員情報，详见 §5.1.1
-- **Companion**（规划中）—— 同行者记录，分为当前绑定与曾绑定，详见 §5.1.1
-- **EventSnapshot**（已有）—— 演出快照，包含页面解析结果与表单选项，详见 §5.2
-- **LotteryPreference**（已有，已扩展 `daySelectionByAccountId`）—— 抽选偏好，支持每账号日别选择，详见 §5.3
-- **LotteryTask / AccountRun**（已有，已扩展 `selectedDays` per-account）—— 抽选任务与单账号运行状态，详见 §5.4
-- **ApplicationRecord**（规划中）—— 历史申请记录，由档案采集运行自动采集，详见 §6.y
-- **LotteryResultRecord**（规划中）—— 中落选结果记录，通过手动刷新获取，详见 §6.y
-- **ProfileHarvestRun**（规划中）—— 档案采集运行生命周期，复用浏览器会话引擎，详见 §5.1.2
+- **Account**（已有）—— 账号基本凭据与邮件配置，详见 §7.1
+- **AccountProfile**（规划中）—— 账号档案，采集自 Eplus 会員情報，详见 §7.1.1
+- **Companion**（规划中）—— 同行者记录，分为当前绑定与曾绑定，详见 §7.1.1
+- **EventSnapshot**（已有）—— 演出快照，包含页面解析结果与表单选项，详见 §7.2
+- **LotteryPreference**（已有，已扩展 `daySelectionByAccountId`）—— 抽选偏好，支持每账号日别选择，详见 §7.3
+- **LotteryTask / AccountRun**（已有，已扩展 `selectedDays` per-account）—— 抽选任务与单账号运行状态，详见 §7.4
+- **ApplicationRecord**（规划中）—— 历史申请记录，由档案采集运行自动采集，详见 §10
+- **LotteryResultRecord**（规划中）—— 中落选结果记录，通过手动刷新获取，详见 §10
+- **ProfileHarvestRun**（规划中）—— 档案采集运行生命周期，复用浏览器会话引擎，详见 §7.1.2
 
-### 5.1 Account
+### 7.1 Account
 
 ```text
 Account
@@ -262,7 +262,7 @@ Account
 
 账号密码和邮件服务访问凭据均以每台机器独有的主密钥加密；导出时默认不含密码，需要用户输入导出密码才可生成加密备份。
 
-### 5.1.1 AccountProfile
+### 7.1.1 AccountProfile
 
 `AccountProfile` 是与 `Account` 一对一关联的档案实体。每个账号可零个或一个档案记录，在首次成功登录后由档案采集运行（`ProfileHarvestRun`）自动填充。
 
@@ -324,7 +324,7 @@ Companion
 - 姓名、性别、生年月日、地址等 PII 在日志中按字段级脱敏：姓名显示首字 + `*`（如 `张*`），其余字段替换为字段名标签（如 `[GENDER]`、``[BIRTHDAY]``、``[ADDRESS]``）。
 - 同行者姓名同样适用姓名脱敏规则；`memberId` 和 `relationship` 保留完整值，不属于 PII 脱敏范围。
 
-### 5.1.2 ProfileHarvestRun
+### 7.1.2 ProfileHarvestRun
 
 `ProfileHarvestRun` 记录单次档案采集运行的生命周期。一次运行从登录成功后的页面遍历开始，到所有目标字段读取完成（或失败暂停）结束。
 
@@ -346,11 +346,11 @@ ProfileHarvestRun
   completedAt: datetime?
 ```
 
-`ProfileHarvestRun` 复用浏览器会话引擎（§4.x）和页面状态分类器（§4.y），其状态到引擎循环的映射与 `AccountRun` 类似：`LoggingIn` / `AwaitingEmailCode` 委托引擎执行登录流程，`Extracting` 委托引擎按预定义页面顺序读取各档案字段，`AwaitingManualAction` 暂停并通知操作者接管。
+`ProfileHarvestRun` 复用浏览器会话引擎（§5）和页面状态分类器（§6），其状态到引擎循环的映射与 `AccountRun` 类似：`LoggingIn` / `AwaitingEmailCode` 委托引擎执行登录流程，`Extracting` 委托引擎按预定义页面顺序读取各档案字段，`AwaitingManualAction` 暂停并通知操作者接管。
 
-> 档案采集运行的流程快照仅记录访问过的页面状态序列，不记录决策点（详见 §8 流程快照章节中关于档案采集与抽选运行的决策点差异说明）。
+> 档案采集运行的流程快照仅记录访问过的页面状态序列，不记录决策点（详见 §12 流程快照章节中关于档案采集与抽选运行的决策点差异说明）。
 
-### 5.2 EventSnapshot
+### 7.2 EventSnapshot
 
 ```text
 EventSnapshot
@@ -368,7 +368,7 @@ EventSnapshot
 
 `raw_form_schema` 至少包含可申请席种、每个席种的枚数范围、希望顺位字段、付款方式、配送/取票字段及必填项。任何无法确认的字段都应要求用户在浏览器人工检查。
 
-### 5.3 LotteryPreference
+### 7.3 LotteryPreference
 
 ```text
 LotteryPreference
@@ -405,7 +405,7 @@ SerialCodeRequirement
 
 "両日"（两天都选）不是 `availableDays` 中的独立枚举值。它表示操作者为某个账号同时勾选 day1 和 day2，对应 `selectedDays = ["day1", "day2"]`。
 
-### 5.3.1 每账号日别选择
+### 7.3.1 每账号日别选择
 
 抽选偏好中的日别选择以**每账号**为粒度存储，不作为任务全局值。扩展后的 `LotteryPreference` 增加 `daySelectionByAccountId` 字段：
 
@@ -440,11 +440,11 @@ LotteryPreference
 
 **运行时再确认**：即使操作者在快照时预设了 `selectedDays`，引擎在进入 `DaySelection` 状态时仍会读取该账号的当前配置并执行对应勾选。操作者可在任务提交前的预览阶段覆盖单个账号的选择。
 
-### 5.3.2 DaySelection 拦截页
+### 7.3.2 DaySelection 拦截页
 
 **DaySelection 拦截页（页面状态分类器中的 `DaySelection` 状态）**：
 
-输入抽选码后，Eplus 可能展示一个日别选择页面，列出 day1、day2 或両日的选项。此页面被页面状态分类器（§4.y）识别为 `DaySelection` 状态。引擎在 `LotteryForm` 状态之前处理此状态，按账号的 `selectedDays` 配置自动选择对应选项，随后点击"进入抽选"或类似按钮，进入标准的 `LotteryForm` 抽选表单页。
+输入抽选码后，Eplus 可能展示一个日别选择页面，列出 day1、day2 或両日的选项。此页面被页面状态分类器（§6）识别为 `DaySelection` 状态。引擎在 `LotteryForm` 状态之前处理此状态，按账号的 `selectedDays` 配置自动选择对应选项，随后点击"进入抽选"或类似按钮，进入标准的 `LotteryForm` 抽选表单页。
 
 引擎在 `DaySelection` 状态下的交互步骤：
 
@@ -456,7 +456,7 @@ LotteryPreference
 
 日别选择页面上的具体 DOM 结构（各日期选项的单选/复选控件和导航按钮的精确选择器）均标记为 待核对，需在实际抽选码页面中确认后填入 `eplusPageParser.ts` 的 selectorHints。
 
-### 5.3.3 任务创建时的日别校验
+### 7.3.3 任务创建时的日别校验
 
 若演出的 `daySelectionRequired === true` 且 `availableDays` 包含多个值，在创建 `LotteryTask` 时校验每个选中账号是否已设置 `selectedDays`。若存在未选择日别的账号，拒绝创建任务并提示操作者补全。
 
@@ -470,10 +470,10 @@ LotteryPreference
 本节仅描述该规则的设计意图和校验逻辑，不对 `ipc.ts` 做具体编辑。实际实现时，此校验块应紧接现有抽选码校验逻辑（`src/main/ipc.ts:43-50`）之后。
 
 > **关联章节**：
-> - §4.y 页面状态分类器：`DaySelection` 状态的定义及其在状态匹配优先级中位于 `LotteryForm` 之前
-> - §8 流程快照决策点：day1/day2/両日的选择是抽选运行的可审计决策点，记录在 `flow-snapshot.json` 中
+> - §6 页面状态分类器：`DaySelection` 状态的定义及其在状态匹配优先级中位于 `LotteryForm` 之前
+> - §12 流程快照决策点：day1/day2/両日的选择是抽选运行的可审计决策点，记录在 `flow-snapshot.json` 中
 
-### 5.4 LotteryTask 与 AccountRun
+### 7.4 LotteryTask 与 AccountRun
 
 ```text
 LotteryTask
@@ -497,9 +497,9 @@ AccountRun
   error_detail_redacted: string?
 ```
 
-## 6. 账号导入、修改与备份
+## 8. 账号导入、修改与备份
 
-### 6.1 首次 Excel 导入
+### 8.1 首次 Excel 导入
 
 支持 `.xlsx`、`.xls`、`.csv`。导入向导可让用户将 Excel 列映射到以下字段：
 
@@ -512,13 +512,13 @@ AccountRun
 
 密码不会在导入预览或错误报告中展示。导入完成后应提示用户删除含明文密码的临时 Excel 副本，应用自身不复制该文件。
 
-### 6.2 后续维护
+### 8.2 后续维护
 
 - 账号列表支持搜索、标签分组、启用/停用、逐项编辑与批量更新邮件服务配置。
 - 删除账号只删除本地数据和自动化 profile，不影响 Eplus 账号本身。
 - 支持导出仅含元数据的 CSV，以及采用用户口令加密的完整备份包。
 
-## 6.x 档案采集流程（Profile Harvesting）【规划中】
+## 9. 档案采集流程（Profile Harvesting）【规划中】
 
 ### 采集触发时机
 
@@ -533,7 +533,7 @@ AccountRun
 
 一次完整的档案采集运行按以下步骤顺序执行：
 
-1. **会话准备**：复用有效会话（§4.x 引擎的会话探测 + 复用机制），或在无有效会话时执行完整登录（邮箱 + 密码 → 邮箱验证码 → 人工接管 captcha 等）。验证码环节走 Verification Service 的 `waitForVerificationCode` 接口，遇到 captcha 时暂停等待人工接管。
+1. **会话准备**：复用有效会话（§5 引擎的会话探测 + 复用机制），或在无有效会话时执行完整登录（邮箱 + 密码 → 邮箱验证码 → 人工接管 captcha 等）。验证码环节走 Verification Service 的 `waitForVerificationCode` 接口，遇到 captcha 时暂停等待人工接管。
 2. **导航至会員ページ**：登录后导航至 Eplus 会員マイページ。页面确切 URL 标记为 待核对，需通过 Eplus 帮助文档（ヘルプ）及首页导航定位。
 3. **提取基本档案**：从会員情報页面提取 email、name、gender、birthday、address、phone 等字段。每个字段的 DOM 选择器均标记为 待核对。
 4. **提取密码（点击显示）**：若 Eplus 会員情報页面提供"点击显示"或类似功能（点击后明文显示密码字段），引擎自动执行点击 → 读取 → 加密存储。若点击后触发 captcha 或额外验证，暂停等待人工接管。若页面不支持密码显示，标记 `revealSupported: false` 并跳过此步骤。此步骤为尽力而为（best-effort），失败时不影响其他字段采集。
@@ -553,7 +553,7 @@ AccountRun
 
 ### 多次登录
 
-由于 Eplus 会话可能因超时、IP 切换或其他原因过期，单次完整的档案采集流程可能经历多次登录。引擎的会话生命周期管理（§4.x）已在架构层面处理此问题：每次流程启动前先探测会话有效性，若过期则重新登录。"多次登录"是指在长时间采集（如遍历多个页面）的过程中可能遭遇中途会话过期，引擎会检测到 `Login` 状态并自动重新执行登录，不会丢失已采集的数据。引擎的这一行为与抽选运行的登录重试逻辑完全一致。
+由于 Eplus 会话可能因超时、IP 切换或其他原因过期，单次完整的档案采集流程可能经历多次登录。引擎的会话生命周期管理（§5）已在架构层面处理此问题：每次流程启动前先探测会话有效性，若过期则重新登录。"多次登录"是指在长时间采集（如遍历多个页面）的过程中可能遭遇中途会话过期，引擎会检测到 `Login` 状态并自动重新执行登录，不会丢失已采集的数据。引擎的这一行为与抽选运行的登录重试逻辑完全一致。
 
 ### 本人账号约束
 
@@ -561,7 +561,7 @@ AccountRun
 
 ### 引擎与分类器复用
 
-档案采集运行（`ProfileHarvestRun`）与抽选运行（`AccountRun`）共享同一个浏览器会话引擎（§4.x）和页面状态分类器（§4.y）。`ProfileHarvestRun` 的状态转换如下：
+档案采集运行（`ProfileHarvestRun`）与抽选运行（`AccountRun`）共享同一个浏览器会话引擎（§5）和页面状态分类器（§6）。`ProfileHarvestRun` 的状态转换如下：
 
 | 状态 | 含义 | 引擎行为 |
 | --- | --- | --- |
@@ -580,11 +580,11 @@ AccountRun
 - `harvestedFields` 记录本次实际更新的字段名称列表。
 - 采集过程中途失败的字段不影响已采集成功的其他字段（best-effort）。
 
-## 6.y 申请记录与中落选结果 + 账号详情 UI【规划中】
+## 10. 申请记录与中落选结果 + 账号详情 UI【规划中】
 
-### 6.y.1 ApplicationRecord（申请记录）
+### 10.1 ApplicationRecord（申请记录）
 
-`ApplicationRecord` 记录账号在 Eplus 站点上的历史抽选申请。每条记录对应一次申込，由档案采集流程（§6.x）在步骤 6 中自动采集。
+`ApplicationRecord` 记录账号在 Eplus 站点上的历史抽选申请。每条记录对应一次申込，由档案采集流程（§9）在步骤 6 中自动采集。
 
 ```text
 ApplicationRecord
@@ -602,9 +602,9 @@ ApplicationRecord
 
 来源：Eplus 会員ページ → 申込履歴。该页面为登录后页面，确切 URL 和 DOM 选择器均标记为 **待核对**，需通过 Eplus 帮助文档（ヘルプ）及首页/会員メニュー导航定位后确认。
 
-采集方式：在档案采集运行（`ProfileHarvestRun`）的步骤 6 中，引擎导航至申込履歴页面并逐条提取历史申请记录。采集逻辑复用浏览器会话引擎（§4.x）的读→判→动循环，每条记录提取后立即写入本地数据库。
+采集方式：在档案采集运行（`ProfileHarvestRun`）的步骤 6 中，引擎导航至申込履歴页面并逐条提取历史申请记录。采集逻辑复用浏览器会话引擎（§5）的读→判→动循环，每条记录提取后立即写入本地数据库。
 
-### 6.y.2 LotteryResultRecord（中落选结果记录）
+### 10.2 LotteryResultRecord（中落选结果记录）
 
 `LotteryResultRecord` 记录账号在 Eplus 站点上的抽选结果。每条记录对应一次抽选的中选/落选/待通知/取消判定。
 
@@ -624,7 +624,7 @@ LotteryResultRecord
 
 **刷新方式（用户确认）**：结果记录仅通过操作者手动点击 **"刷新结果"按钮** 触发刷新。不设后台轮询，不设定时任务。理由：结果更新频率低（按天/按周），自动轮询浪费会话和 IP 资源且无实际收益。刷新动作由引擎执行一次性的"导航至当選確認页面 → 读取结果列表 → 写入本地数据库"流程，完成后立即释放浏览器资源。
 
-### 6.y.3 筛选器模型
+### 10.3 筛选器模型
 
 定义一个组合筛选器，应用于账号详情 UI 中的申请记录表格和中落选结果表格。筛选器以 **账号 × 结果类型 × 日期** 为核心组合轴，支持以下维度自由组合（AND 逻辑）：
 
@@ -642,7 +642,7 @@ LotteryResultRecord
 
 `resultKind` 筛选维度仅对中落选结果表格生效，申请记录表格不展示该维度。`日别` 和 `日期范围` 对两个表格均生效。`演出` 对两个表格均生效。
 
-### 6.y.4 账号详情 UI
+### 10.4 账号详情 UI
 
 账号详情界面是操作者点击账号列表中的某个账号后进入的二级页面，整合账号档案、同行者、申请记录和中落选结果四类信息，是查阅单账号数据的核心视图。
 
@@ -654,11 +654,11 @@ LotteryResultRecord
 
 3. **申请记录表格**：以表格形式列出该账号的 `ApplicationRecord` 列表。表头包含筛选控件：演出名称搜索框、日期范围选择器、日别下拉。表格列：演出名称、申请时间、场次/日期、票档、枚数、申请编号（脱敏显示）、状态。支持按申请时间正序/倒序排序，默认按申请时间倒序。表格上方显示总记录数。
 
-4. **中落选结果表格**：以表格形式列出该账号的 `LotteryResultRecord` 列表。表头包含筛选控件：结果类型下拉（中選/落選/待通知/取消，支持多选）、日期范围选择器、演出名称搜索框。表格列：演出名称、结果类型（以颜色或标签区分四种结果）、结果确定时间、支付截止时间、申请编号（脱敏显示）。表格上方右侧放置 **"刷新结果"按钮**，点击后触发结果刷新流程（详见 §6.y.2）。表格上方左侧显示总记录数。
+4. **中落选结果表格**：以表格形式列出该账号的 `LotteryResultRecord` 列表。表头包含筛选控件：结果类型下拉（中選/落選/待通知/取消，支持多选）、日期范围选择器、演出名称搜索框。表格列：演出名称、结果类型（以颜色或标签区分四种结果）、结果确定时间、支付截止时间、申请编号（脱敏显示）。表格上方右侧放置 **"刷新结果"按钮**，点击后触发结果刷新流程（详见 §10.2）。表格上方左侧显示总记录数。
 
-5. **操作按钮区**：页面底部提供两个操作按钮。"重新采集档案"按钮触发一次完整的档案采集运行（§6.x），采集完成后自动刷新页面中的档案卡片、同行者列表和申请记录表格。"返回账号列表"按钮导航回账号管理终端主视图。
+5. **操作按钮区**：页面底部提供两个操作按钮。"重新采集档案"按钮触发一次完整的档案采集运行（§9），采集完成后自动刷新页面中的档案卡片、同行者列表和申请记录表格。"返回账号列表"按钮导航回账号管理终端主视图。
 
-### 6.y.5 持久化与脱敏
+### 10.5 持久化与脱敏
 
 `ApplicationRecord` 和 `LotteryResultRecord` 分别对应 sql.js 中的两张新表，表结构由上述实体定义直接映射。
 
@@ -671,7 +671,7 @@ LotteryResultRecord
 
 结果刷新覆盖逻辑：每次手动刷新后，以新采集的结果记录覆盖该账号该演出的已有结果记录（按 `accountId + eventTitle + applicationId` 去重）。历史结果不做版本保留，仅保留最新一次刷新的数据。
 
-## 7. 邮箱验证码架构
+## 11. 邮箱验证码架构
 
 `MailProvider` 必须是明确接口，而不是由登录流程直接调用任意项目代码：
 
@@ -700,7 +700,7 @@ interface MailProvider {
 
 > IMAP 邮箱和通用 HTTP API 邮箱模式（`imap`、`http-api`）已从支持的自动模式中移除。若操作者此前配置了这些模式，应迁移至上述 cerise-bouquet 或手动模式。
 
-### 7.1 共享邮箱的验证码归属策略
+### 11.1 共享邮箱的验证码归属策略
 
 所有 Eplus 账号的验证码邮件均发往**同一个** cerise-bouquet 总邮箱地址。由于应用无法为每个账号分配独立的收件别名，需要在收到验证码时判断该验证码属于哪个账号。
 
@@ -713,7 +713,7 @@ interface MailProvider {
 
 该策略的实现细节（特别是步骤 2 的邮件内容匹配信号）标记为待核对，需在实际收到 Eplus 验证码邮件后确认邮件模板结构。
 
-### 7.2 验证码提取规则
+### 11.2 验证码提取规则
 
 验证码提取由邮件正文 HTML 解析后匹配，至少校验以下条件：
 
@@ -723,22 +723,22 @@ interface MailProvider {
 
 不得仅以任意六位数字正则匹配。优先按已知格式（`認証コード：123456`、`確認コード 123456` 等）提取；仅在以上格式均不匹配时才回退到通用六位数字模式。
 
-### 7.3 异常处理
+### 11.3 异常处理
 
-邮件服务不可用、超时或发现多封候选邮件且无法自动区分时，`AccountRun` 进入 `AwaitingManualAction`，浏览器保留在验证码输入页，操作者可在 UI 中输入验证码后继续。多封候选邮件优先尝试归属策略（§7.1）自动区分；仅当策略无法判定时触发人工接管。
+邮件服务不可用、超时或发现多封候选邮件且无法自动区分时，`AccountRun` 进入 `AwaitingManualAction`，浏览器保留在验证码输入页，操作者可在 UI 中输入验证码后继续。多封候选邮件优先尝试归属策略（§11.1）自动区分；仅当策略无法判定时触发人工接管。
 
-## 8. Eplus 浏览器适配器
+## 12. Eplus 浏览器适配器
 
-### 8.1 浏览器隔离
+### 12.1 浏览器隔离
 
-- 每个账号使用独立的持久化浏览器 profile：`profiles/<account-id>/`。此 profile 由浏览器会话引擎（文档 §4.x）统一管理，引擎在首次运行时自动创建，后续运行直接复用。
+- 每个账号使用独立的持久化浏览器 profile：`profiles/<account-id>/`。此 profile 由浏览器会话引擎（文档 §5）统一管理，引擎在首次运行时自动创建，后续运行直接复用。
 - 默认串行执行账号任务，避免会话串扰、重复申请和不必要的高频访问。
 - 不注入隐藏自动化脚本，不规避站点安全机制；使用正常页面交互、显式等待与合理退避。
-- 每个页面跳转和最终提交前保存截图与脱敏 HTML 快照。截图和快照的实际捕获由浏览器会话引擎的"为每一步保存快照"机制（文档 §4.x）统一负责，适配器本身不独立执行截图逻辑。
+- 每个页面跳转和最终提交前保存截图与脱敏 HTML 快照。截图和快照的实际捕获由浏览器会话引擎的"为每一步保存快照"机制（文档 §5）统一负责，适配器本身不独立执行截图逻辑。
 
-### 8.2 页面模型（基于引擎与分类器）
+### 12.2 页面模型（基于引擎与分类器）
 
-浏览器适配器的页面交互由一组可测试步骤构成。每步在浏览器会话引擎（文档 §4.x）上执行，并委托页面状态分类器（文档 §4.y）完成状态判定。引擎运行读→判→动→再读的步骤循环，分类器以 LIVE 页面为输入返回当前状态枚举；适配器根据分类器结果选择下一步操作。
+浏览器适配器的页面交互由一组可测试步骤构成。每步在浏览器会话引擎（文档 §5）上执行，并委托页面状态分类器（文档 §6）完成状态判定。引擎运行读→判→动→再读的步骤循环，分类器以 LIVE 页面为输入返回当前状态枚举；适配器根据分类器结果选择下一步操作。
 
 步骤列表与分类器状态的对应关系：
 
@@ -779,7 +779,7 @@ readReceipt()                → 引擎读取回执页（Receipt 状态）
 
 同行者（companions）在提交过程中仅作只读展示，显示于确认页上。适配器不对同行者字段进行任何自动选择或填写。同行者不属于 `LotteryPreference` 的可操作字段，也不参与申请提交逻辑。
 
-### 8.3 幂等与重复申请保护
+### 12.3 幂等与重复申请保护
 
 提交前必须进行以下检查：
 
@@ -788,13 +788,13 @@ readReceipt()                → 引擎读取回执页（Receipt 状态）
 3. 计算 `account_id + canonical_event_id + preference` 的幂等键，并检查本地是否已成功提交。
 4. 只有用户确认的任务可进入最终提交；批量任务的首次最终提交须逐账号记录确认页摘要。
 
-此外，引擎在提交前查询该账号的申请历史记录（由档案采集运行采集并持久化至本地数据库，详见 §4.y 中关于申请记录采集的 Todo-8 章节），将既有申请记录作为额外的重复检查来源。若历史记录中已存在该演出的申请受付番号，提交直接标记为 `AlreadyApplied`，不再进行页面操作。
+此外，引擎在提交前查询该账号的申请历史记录（由档案采集运行采集并持久化至本地数据库，详见 §6 中关于申请记录采集的 Todo-8 章节），将既有申请记录作为额外的重复检查来源。若历史记录中已存在该演出的申请受付番号，提交直接标记为 `AlreadyApplied`，不再进行页面操作。
 
 提交按钮点击后不立即认为成功，必须读取站点回执页的申请编号或明确成功文案。引擎根据分类器返回的 `Receipt` 状态确认提交是否完成；若 `Receipt` 状态中检测到"受付番号"，提取申请编号并标记 `AccountRun` 为 `Submitted`。
 
 网络中断或提交后未获得明确回执的，标记为 `UnknownSubmissionState`。恢复时先查询申请历史与本地幂等键，禁止盲目重试。引擎不会对状态未知的 `AccountRun` 自动重新提交。
 
-## 9. 任务状态机与人工接管
+## 13. 任务状态机与人工接管
 
 ### 任务状态机
 
@@ -809,7 +809,7 @@ Submitting -> UnknownSubmissionState -> Submitted | Failed
 
 ### AccountRun 状态流
 
-AccountRun 是抽选任务中每个账号的运行实例，状态定义见 §5.4。单次 AccountRun 的典型状态转换路径：
+AccountRun 是抽选任务中每个账号的运行实例，状态定义见 §7.4。单次 AccountRun 的典型状态转换路径：
 
 ```text
 Pending → LoggingIn → AwaitingEmailCode → FillingForm → AwaitingSubmitConfirmation → Submitting → Submitted
@@ -817,11 +817,11 @@ Pending → LoggingIn → AwaitingEmailCode → FillingForm → AwaitingSubmitCo
                   ↘ Failed
 ```
 
-引擎在 `FillingForm` 阶段按页面状态分类器（§4.y）返回的判定逐页处理，包括日别选择（`DaySelection`）、拦截页（`InterstitialConsent`、`CheckboxGate`）自动点击/勾选，以及 `LotteryForm` 表单填写。
+引擎在 `FillingForm` 阶段按页面状态分类器（§6）返回的判定逐页处理，包括日别选择（`DaySelection`）、拦截页（`InterstitialConsent`、`CheckboxGate`）自动点击/勾选，以及 `LotteryForm` 表单填写。
 
 ### ProfileHarvestRun 状态流
 
-`ProfileHarvestRun`（§5.1.2，规划中）的独立状态流：
+`ProfileHarvestRun`（§7.1.2，规划中）的独立状态流：
 
 ```text
 Pending → LoggingIn → AwaitingEmailCode → Extracting → Completed
@@ -829,11 +829,11 @@ Pending → LoggingIn → AwaitingEmailCode → Extracting → Completed
                 ↘ Failed
 ```
 
-`ProfileHarvestRun` 与 `AccountRun` 共用同一浏览器会话引擎（§4.x）和页面状态分类器（§4.y）。触发时机为每次成功登录后自动执行（详见 §6.x）：登录完成后引擎自动启动一次档案采集运行，依次遍历会員情報、同行者管理和申込履歴等页面，提取各字段后写入本地数据库。
+`ProfileHarvestRun` 与 `AccountRun` 共用同一浏览器会话引擎（§5）和页面状态分类器（§6）。触发时机为每次成功登录后自动执行（详见 §9）：登录完成后引擎自动启动一次档案采集运行，依次遍历会員情報、同行者管理和申込履歴等页面，提取各字段后写入本地数据库。
 
 ### 分类器状态到运行状态的映射
 
-页面状态分类器（§4.y）输出的页面级判定需转换为任务级运行状态。以下为完整的映射关系：
+页面状态分类器（§6）输出的页面级判定需转换为任务级运行状态。以下为完整的映射关系：
 
 | 分类器状态 | AccountRun 状态 | 说明 |
 |---|---|---|
@@ -851,7 +851,7 @@ Pending → LoggingIn → AwaitingEmailCode → Extracting → Completed
 
 ### IP 轮换前置步骤
 
-IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置步骤，执行时机为引擎创建浏览器会话之前：
+IP 轮换（§15，规划中）为每次 `AccountRun` 启动前的必需前置步骤，执行时机为引擎创建浏览器会话之前：
 
 ```text
 每个 AccountRun 执行前：
@@ -869,9 +869,9 @@ IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置
 
 界面应显示当前账号、原因、浏览器窗口状态和“继续/取消此账号/取消整个任务”操作。
 
-## 10. 用户界面流程
+## 14. 用户界面流程
 
-### 10.1 主导航
+### 14.1 主导航
 
 - `任务`：查看运行中、待人工处理、已完成和失败任务。
 - `新建抽选`：创建向导。
@@ -881,8 +881,8 @@ IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置
     - **档案卡片**：展示 `AccountProfile` 中的基本档案信息（姓名、邮箱、手机（脱敏）、性别、生年月日、地址），密码字段以 `******` 显示，旁边提供"显示密码"按钮（点击后临时解密并展示明文，5 秒后自动隐藏）。卡片底部显示最近采集时间（`harvestedAt`）和采集状态（`harvestStatus`）。
     - **同行者列表（只读）**：分为"当前绑定"和"曾绑定"两个分组，各自以列表展示 `Companion` 信息（姓名、关系、绑定/解绑时间）。列表上方标注"只读展示，不在申请中自动分配"。同行者的绑定/解绑操作需操作者自行在 Eplus 站点上完成。
     - **申请记录表格**：以表格形式列出该账号的 `ApplicationRecord` 列表。表头包含筛选控件：演出名称搜索框、日期范围选择器、日别下拉。表格列：演出名称、申请时间、场次/日期、票档、枚数、申请编号（脱敏显示）、状态。支持按申请时间排序，默认倒序。表格上方显示总记录数。
-    - **中落选结果表格**：以表格形式列出该账号的 `LotteryResultRecord` 列表。表头包含筛选控件：结果类型下拉（中選/落選/待通知/取消，支持多选）、日期范围选择器、演出名称搜索框。表格上方右侧放置 **"刷新结果"按钮**，点击后触发结果刷新流程（详见 §6.y.2）。表格上方左侧显示总记录数。
-    - **操作按钮区**：页面底部提供"重新采集档案"按钮（触发一次完整的档案采集运行 §6.x）和"返回账号列表"按钮。
+    - **中落选结果表格**：以表格形式列出该账号的 `LotteryResultRecord` 列表。表头包含筛选控件：结果类型下拉（中選/落選/待通知/取消，支持多选）、日期范围选择器、演出名称搜索框。表格上方右侧放置 **"刷新结果"按钮**，点击后触发结果刷新流程（详见 §10.2）。表格上方左侧显示总记录数。
+    - **操作按钮区**：页面底部提供"重新采集档案"按钮（触发一次完整的档案采集运行 §9）和"返回账号列表"按钮。
 - `设置`：
   - **数据目录**：配置数据、artifacts、profiles 的存储路径。
   - **备份与恢复**：导出加密备份包、从备份恢复。
@@ -894,7 +894,7 @@ IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置
     - **Clash 控制器配置**：配置 Clash 外部控制器的 `host`、`port`、`secret` 和 `proxyGroup` 参数。`secret` 字段通过 `safeStorage` 加密存储，不在配置文件中明文保存。
   - **邮箱验证码源配置**：配置全局邮箱验证码服务的 provider（cerise-bouquet temp-mail forwarder / auth mailbox / 手动输入），以及对应的 API 端点与鉴权参数。
 
-### 10.2 新建抽选向导
+### 14.2 新建抽选向导
 
 1. 输入 Eplus URL，验证域名为 `eplus.jp`，打开页面并读取演出/申请信息。
 2. 展示实际解析到的票档、可选枚数、希望顺位和付款方式；不自行猜测缺失选项。
@@ -903,28 +903,13 @@ IP 轮换（§11.x，规划中）为每次 `AccountRun` 启动前的必需前置
 5. 生成汇总预览：演出、账号数、每个账号的日别选择（若有）、每个希望顺位、付款方式、截至时间和风险提示。
 6. 用户确认后创建并排队。若需要，每个账号在最终页面再次由用户批准，或由设置中明确启用的\u201c已确认批量提交\u201d策略处理。
 
-## 11. 数据安全与隐私
-
-- 密码、邮箱 API token 和验证码仅在内存中短暂以明文存在；数据库存密文。
-- 应用启动需由 Windows 当前用户解锁；可选设置独立主密码。
-- 所有日志进行字段级脱敏：邮箱显示为 `ab***@example.com`，申请号可保留后四位，密码和验证码永不记录。
-- `artifacts/` 文件设置访问限制并可从 UI 一键清理；默认保留 30 天。
-- 禁止将 profile、数据库、截图或日志提交到 Git；提供 `.gitignore` 模板。
-- **档案 PII 保护**：`AccountProfile` 中的姓名、手机号、性别、生年月日、地址等 PII 字段在日志中按字段级脱敏。手机号仅保留前三位（如 `080****1234`），姓名仅保留首字（如 `张*`），其余字段替换为字段名标签（如 `[GENDER]`、`[BIRTHDAY]`、`[ADDRESS]`）。数据库中以明文存储（本地单机环境），但 `artifacts/` 中的截图和 HTML 快照在脱敏后才归档。
-- **采集密码处理**：`encryptedPassword` 使用 Electron `safeStorage` 加密存储。明文密码仅在操作者主动点击\u201c显示密码\u201d按钮时解密并短暂展示（5 秒后自动隐藏），不复制到剪贴板，不写入日志。
-- **Clash 控制器密钥**：Clash 外部控制器的 `secret` 字段通过 `safeStorage` 加密存储，不在 `config.json` 中明文保存。
-- **ip-api.com 第三方 IP 披露**：`detectIp()` 调用 ip-api.com 免费 API 时，当前出口 IP 地址会发送至 ip-api.com（第三方服务）。操作者应知晓此隐私风险。ip-api.com 的端点可在设置中替换为自建服务或其他 IP 检测 API。详见 §11.x.1。
-- **共享邮箱验证码**：所有 Eplus 账号的验证码邮件发往同一个 cerise-bouquet 邮箱。应用通过时间窗口 + 邮件内容匹配将验证码与账号关联。当关联失败时，暂停运行并由操作者人工确认。详见 §7。
-- **支付边界**：`submitApplication` 仅选择付款方式至 card/CVV 输入之前。不自动填写卡号、CVV、有效期。不存储任何卡片数据。详见 §8.2。
-
-
-## 11.x 网络层 / IP 轮换（Network Rotation）【规划中】
+## 15. 网络层 / IP 轮换（Network Rotation）【规划中】
 
 网络层负责在多个账号串行运行时为每个账号提供独立的出口 IP。它的唯一目的是账号隔离：不同账号从不同 IP 发起请求，避免 Eplus 将多个账号关联为同一操作者。这并非用于绕过站点安全机制、频率限制或 CAPTCHA。
 
 当前选型为通过 Clash Verge 的外部控制器 API 切换代理节点，并用 ip-api.com 验证切换后的出口 IP 归属地。此子系统尚无任何代码实现，全部标记为规划中。
 
-### 11.x.1 NetworkRotationProvider 接口
+### 15.1 NetworkRotationProvider 接口
 
 ```ts
 interface NetworkRotationProvider {
@@ -953,7 +938,7 @@ interface NodeInfo {
 
 `detectIp` 是旋转后的验证手段，`rotate` 是节点切换动作。两者在每次账号运行前组合调用：先 rotate，再 detectIp 验证。`listNodes` 为可选接口，仅在 UI 需要展示可用节点列表时使用。
 
-### 11.x.2 Clash 控制器实现（ClashControllerProvider）
+### 15.2 Clash 控制器实现（ClashControllerProvider）
 
 第一实现基于 Clash Verge 的外部控制器（external controller）REST API。Clash Verge 启动后默认在 `127.0.0.1:9090` 暴露一个 HTTP 控制接口，允许外部程序查询和切换代理节点。
 
@@ -1003,9 +988,9 @@ GET http://ip-api.com/json/?fields=query,country,regionName,city
 
 免费层限制为 45 req/min，串行运行场景下远低于此阈值。
 
-> **隐私注意**：此调用向 ip-api.com（第三方服务）披露当前出口 IP 地址，存在隐私泄露风险。操作者应知晓此风险。ip-api.com 端点可配置替换为自建服务，但替换需操作者自行完成。详见 §11 数据安全与隐私章节。
+> **隐私注意**：此调用向 ip-api.com（第三方服务）披露当前出口 IP 地址，存在隐私泄露风险。操作者应知晓此风险。ip-api.com 端点可配置替换为自建服务，但替换需操作者自行完成。详见 §16 数据安全与隐私章节。
 
-### 11.x.3 轮换策略
+### 15.3 轮换策略
 
 **一抽一号**：每个账号的每次抽选运行前，必须执行一次完整的 rotate → verify 流程。不允许跳过，不允许复用上一个账号的 IP。
 
@@ -1026,7 +1011,7 @@ GET http://ip-api.com/json/?fields=query,country,regionName,city
 - 用 IP 轮换突破地域限制访问仅限日本的内容
 - 在单次抽选运行中途切换 IP
 
-### 11.x.4 UI 与操作界面
+### 15.4 UI 与操作界面
 
 **设置页**：
 
@@ -1038,14 +1023,29 @@ GET http://ip-api.com/json/?fields=query,country,regionName,city
 
 **轮换日志**：每次 rotate → verify 的结果记录至 Audit Log。日志中的 IP 字段脱敏处理：仅显示前两段和归属地，如 `203.0.***.*** (Tokyo, Japan)`。完整的未脱敏 IP 不进入任何日志文件。
 
-### 11.x.5 非目标
+### 15.5 非目标
 
 - 不提供内置的代理节点获取功能。节点由操作者自行在 Clash 中配置和管理。
 - IP 检测服务（ip-api.com）不在应用内提供替代方案。操作者如需替换端点，需修改配置或代码。
 - 不实现多代理后端支持。第一版仅对接 Clash 外部控制器；后续可按 `NetworkRotationProvider` 接口扩展其他代理后端。
 - 不检测 IP 是否被 Eplus 标记或封禁。此判断属于业务层而非网络层的职责。
 
-## 12. 错误处理与恢复
+## 16. 数据安全与隐私
+
+- 密码、邮箱 API token 和验证码仅在内存中短暂以明文存在；数据库存密文。
+- 应用启动需由 Windows 当前用户解锁；可选设置独立主密码。
+- 所有日志进行字段级脱敏：邮箱显示为 `ab***@example.com`，申请号可保留后四位，密码和验证码永不记录。
+- `artifacts/` 文件设置访问限制并可从 UI 一键清理；默认保留 30 天。
+- 禁止将 profile、数据库、截图或日志提交到 Git；提供 `.gitignore` 模板。
+- **档案 PII 保护**：`AccountProfile` 中的姓名、手机号、性别、生年月日、地址等 PII 字段在日志中按字段级脱敏。手机号仅保留前三位（如 `080****1234`），姓名仅保留首字（如 `张*`），其余字段替换为字段名标签（如 `[GENDER]`、`[BIRTHDAY]`、`[ADDRESS]`）。数据库中以明文存储（本地单机环境），但 `artifacts/` 中的截图和 HTML 快照在脱敏后才归档。
+- **采集密码处理**：`encryptedPassword` 使用 Electron `safeStorage` 加密存储。明文密码仅在操作者主动点击\u201c显示密码\u201d按钮时解密并短暂展示（5 秒后自动隐藏），不复制到剪贴板，不写入日志。
+- **Clash 控制器密钥**：Clash 外部控制器的 `secret` 字段通过 `safeStorage` 加密存储，不在 `config.json` 中明文保存。
+- **ip-api.com 第三方 IP 披露**：`detectIp()` 调用 ip-api.com 免费 API 时，当前出口 IP 地址会发送至 ip-api.com（第三方服务）。操作者应知晓此隐私风险。ip-api.com 的端点可在设置中替换为自建服务或其他 IP 检测 API。详见 §15.1。
+- **共享邮箱验证码**：所有 Eplus 账号的验证码邮件发往同一个 cerise-bouquet 邮箱。应用通过时间窗口 + 邮件内容匹配将验证码与账号关联。当关联失败时，暂停运行并由操作者人工确认。详见 §11。
+- **支付边界**：`submitApplication` 仅选择付款方式至 card/CVV 输入之前。不自动填写卡号、CVV、有效期。不存储任何卡片数据。详见 §12.2。
+
+
+## 17. 错误处理与恢复
 
 | 情况 | 处理 |
 | --- | --- |
@@ -1064,55 +1064,87 @@ GET http://ip-api.com/json/?fields=query,country,regionName,city
 | 日别选择缺失 | 创建任务时若 `daySelectionRequired === true` 且某账号未设置 `selectedDays`，拒绝创建任务并提示 |
 | 分类器返回 Unknown | 暂停运行，保存截图和 HTML 快照，标记为 `AwaitingManualAction`，提示操作者人工检查页面 |
 
-## 13. 目录与配置建议
+## 18. 目录与配置建议
+
+### 18.1 项目目录结构
 
 ```text
 eplus-assistant/
-  apps/desktop/                 # Tauri + React UI
-  packages/core/                # 领域模型、状态机、用例
-  packages/eplus-adapter/       # Playwright 页面适配器
-  packages/mail-adapters/       # temp-mail/auth 适配器
-  packages/shared/              # DTO、验证、脱敏工具
-  data/                         # 默认不进入版本控制
+  src/
+    main/              # Electron 主进程（IPC、服务、适配器、数据库、密钥存储）
+    renderer/          # React 渲染进程（UI 组件、页面、状态管理）
+    shared/            # 共享类型定义（types.ts、IPC 契约）
+    core/              # 领域逻辑（状态机、验证）
+  data/                # 默认不进入版本控制
     app.db
-    profiles/<account-id>/
-    artifacts/<task-id>/
+    profiles/<account-id>/   # 每账号 Playwright 持久化 context
+    artifacts/<task-id>/     # 截图、HTML 快照、流程快照
   docs/
 ```
 
+### 18.2 运行期配置
+
 运行期配置使用 `config.json` 保存非敏感项，例如数据目录、浏览器路径、验证码超时和日志等级；任何 token、密码、会话 cookie 都不进入该文件。
 
-## 14. 实施阶段
+以下为新增配置项及其默认值：
+
+| 配置项 | 说明 | 默认值 |
+|---|---|---|
+| `clash.controller.host` | Clash 外部控制器地址 | `127.0.0.1` |
+| `clash.controller.port` | 控制器端口 | `9090` |
+| `clash.controller.secret` | 控制器密钥（safeStorage 加密） | （无默认，需用户提供） |
+| `clash.proxyGroup` | 代理组名称 | （无默认，需用户提供） |
+| `network.ipLookupEndpoint` | IP 归属地查询 API 端点 | `http://ip-api.com/json/` |
+| `mail.source` | 邮箱验证码来源 | `cerise-bouquet`（可选 `manual`） |
+
+
+## 19. 实施阶段
 
 ### Phase 0：验证前置条件
 
 - 审阅 `temp-mail` 与 `auth` 的 API、认证方式、邮件检索延迟和错误语义。
 - 以单一测试账号手动走通登录、邮箱验证码和一个抽选确认页，记录页面字段及稳定选择器。
 - 确认 Eplus 允许的正常使用范围与需要人工介入的验证类型。
+- 使用 Playwright 持久化 context 替代静态 `fetch()` 作为页面读写基础。
 
-### Phase 1：本地账号与邮件能力
+### Phase 1：浏览器会话引擎 + 页面状态分类器
 
-- 创建桌面项目、SQLite schema、DPAPI 密钥封装与 Excel 导入。
-- 实现账号管理、标签、加密备份和邮件服务连通性测试。
-- 为 MailProvider 增加模拟实现和单元测试。
+- 实现浏览器会话引擎（§5）：持久化 per-account context、读→判→动→再读循环、会话探测与复用、截图与脱敏 HTML 快照归档、导航预算与退避、人工接管集成。
+- 实现页面状态分类器（§6）：11 种状态枚举（Login、EmailCode、CaptchaSliderDevice、InterstitialConsent、CheckboxGate、LotteryForm、DaySelection、Receipt、ReceptionClosed、Unknown）、状态匹配优先级、选择器来源配置。
+- 编写引擎与分类器的集成测试，使用已记录的页面快照做回归验证。
 
-### Phase 2：单账号登录与表单读取
+### Phase 2：邮箱验证码与账号管理
 
-- 实现隔离 profile、登录、邮箱验证码等待、人工接管和截图归档。
-- 实现 URL 解析、演出快照和申请选项读取，只读不提交。
-- 针对已记录页面快照编写适配器回归测试。
+- 实现 cerise-bouquet temp-mail forwarder 与 auth mailbox 适配器，替换 IMAP/通用 HTTP API 模式。
+- 实现共享邮箱验证码归属策略：时间窗口匹配、邮件内容匹配、最新未认领优先、歧义降级为人工。
+- 完成账号 CRUD、CSV/JSON 导入导出、标签筛选、加密凭据存储、安全备份。
 
-### Phase 3：单账号提交与恢复
+### Phase 3：单账号登录与档案采集
 
-- 实现偏好填写、确认页比对、明确提交、回执提取和幂等保护。
+- 实现单账号完整登录流程：邮箱 → 密码 → 邮箱验证码 → 人工接管（CAPTCHA/滑块）。
+- 实现档案采集运行（§9）：导航至会員情報页面，自动提取姓名、手机、性别、生年月日、地址、密码（尽力而为）；导航至同行者管理页面，提取当前绑定与曾绑定同行者；导航至申込履歴页面，逐条提取历史申请记录。
+- 采集失败的字段不影响其他字段，`harvestStatus` 准确反映采集完整性。
+
+### Phase 4：IP 轮换与日别选择
+
+- 实现 NetworkRotationProvider 接口（§15.1）与 Clash 控制器实现（§15.2）：通过 Clash 外部控制器 REST API 切换代理节点，通过 ip-api.com 验证新 IP 归属地，切换失败时暂停而不使用旧 IP。
+- 实现每账号日别选择：在 `LotteryPreference` 中扩展 `daySelectionByAccountId`，在页面状态分类器中实现 `DaySelection` 状态自动勾选，在任务创建时校验日别选择完整性（§7.3.3）。
+- 实现设置页 IP 管理面板：检测 IP、切换 IP、节点列表、Clash 控制器配置。
+
+### Phase 5：单账号抽选提交与恢复
+
+- 实现偏好填写（`LotteryForm` 状态自动填写票档、枚数、顺位、付款方式）、确认页比对、明确提交、回执提取和幂等保护。
 - 实现异常退出恢复及 `UnknownSubmissionState` 查询策略。
+- 实现付款边界：自动选择付款方式至 card/CVV 输入之前即停止，不自动填写卡片数据。
 
-### Phase 4：批量编排与可用性
+### Phase 6：批量编排与可用性
 
 - 加入账号选择/全选、串行队列、汇总预览、任务页和失败重试。
+- 每账号抽选前执行 IP 轮换前置步骤（rotate → detectIp → 验证通过 → 开始执行）。
 - 增加端到端测试、脱敏审计、备份恢复和可配置数据保留策略。
+- 实现账号详情 UI（§10.4）：档案卡片、同行者列表（只读）、申请记录表格（含筛选器）、中落选结果表格（含刷新按钮）。
 
-## 15. 验收标准
+## 20. 验收标准
 
 1. 用户可从给定 Excel 导入账号，重启应用后仍能安全读取并编辑元数据。
 2. 用户粘贴 Eplus 抽选 URL 后，只能从实际页面解析出的选项中选择票档、枚数、希望顺位和付款方式。
@@ -1120,11 +1152,26 @@ eplus-assistant/
 4. 单账号抽选提交前后都有可审计的确认页摘要和回执结果，程序不会因超时盲目重复提交。
 5. 多账号任务可全选、串行执行、单账号隔离、失败不中断其他账号，并可在中断后恢复。
 6. 密码、验证码、完整邮箱服务令牌不出现在界面日志、数据库明文或导出文件中。
+7. 页面状态分类器可正确识别登录、验证码、CAPTCHA/滑块（→人工接管）、粉色按钮和勾选拦截页面，并在人工接管时保留浏览器窗口供操作者操作。
+8. 账号档案采集可自动获取 Eplus 会員情報中的姓名、手机、性别、生年月日、地址和同行者信息，采集失败字段不影响其他字段。
+9. 邮箱验证码仅通过 mail.cerise-bouquet.xyz（temp-mail forwarder + auth mailbox）或手动输入获取，IMAP 和通用 HTTP API 模式不可用。
+10. 每个账号执行抽选前自动通过 Clash 外部控制器切换至下一个代理节点，并通过 ip-api.com 验证新 IP 归属地，切换失败时暂停而不使用旧 IP。
+11. 抽选码日别选择以每账号为粒度存储，支持 day1/day2/両日；创建任务时校验所有账号的日别选择完整。
 
-## 16. 开发前待确认项
+## 21. 开发前待确认项
 
-- `temp-mail` 与 `auth` 实际提供的调用方式、鉴权方式以及可稳定查询的邮件字段。
-- Eplus 登录与抽选页面的真实 HTML、验证码邮件格式、页面语言与付款方式差异。
-- 希望顺位是否需要支持多个场次/日期组合，以及每场的账号申请限制。
-- 最终提交策略：每个账号人工确认，还是在总览确认后由程序依次提交。
+| 序号 | 待确认项 | 来源章节 | 说明 |
+|---|---|---|---|
+| 1 | 验证码输入页 DOM 结构 | §6 分类器 EmailCode 状态 | 需实际登录后确认选择器 |
+| 2 | CAPTCHA/滑块 iframe 选择器 | §6 分类器 CaptchaSliderDevice 状态 | 需在实际人机验证页面确认 |
+| 3 | OK/確認 按钮选择器 | §6 分类器 InterstitialConsent 状态 | 当前仅有 `cautionNextButton` 和 `finalConsentButton` 的真实选择器 |
+| 4 | CheckboxGate 选择器 | §6 分类器 CheckboxGate 状态 | 当前代码中无任何 checkbox 选择器 |
+| 5 | DaySelection 页面选择器 | §6 分类器 DaySelection 状态 | 需在实际抽选码日别选择页面确认 |
+| 6 | Receipt 回执页 DOM 结构 | §6 分类器 Receipt 状态 | 需在实际提交后观察 |
+| 7 | 会員情報页面 URL 及字段选择器 | §7.1.1 AccountProfile / §9 档案采集 | 需通过 Eplus 帮助文档/首页/会員メニュー定位 |
+| 8 | 同行者管理页面 URL 及选择器 | §7.1.1 Companion / §9 档案采集 | 包括当前绑定和曾绑定同行者的具体位置 |
+| 9 | 申込履歴页面 URL 及选择器 | §10 ApplicationRecord | 需通过 Eplus 帮助文档/首页/会員メニュー定位 |
+| 10 | 当選確認页面 URL 及选择器 | §10 LotteryResultRecord | 同上 |
+| 11 | 共享邮箱验证码邮件内容格式 | §11 邮箱验证码 | 确认 Eplus 验证码邮件中是否包含账号标识以支持自动归属 |
+| 12 | Clash 控制器 host/port/secret/proxyGroup 值 | §15 IP 轮换 | 依赖于运行环境的实际 Clash 配置 |
 
