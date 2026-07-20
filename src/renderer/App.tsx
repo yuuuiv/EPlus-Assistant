@@ -359,7 +359,7 @@ export function App() {
   const ticketOption = getOption(selectedSchema, "ticket");
   const paymentOption = getOption(selectedSchema, "payment");
   const quantityOption = getOption(selectedSchema, "quantity");
-  const needsSerialCode = Boolean(selectedSchema?.serialCode.required);
+  const needsSerialCode = Boolean(selectedSchema?.serialCode?.required);
 
   async function handleAddAccount() {
     const created = await window.eplusApi.addAccount({
