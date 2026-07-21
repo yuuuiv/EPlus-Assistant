@@ -6,10 +6,15 @@ import { AccountService } from "./services/accountService.js";
 import { EventService } from "./services/eventService.js";
 import { SettingsService } from "./services/settingsService.js";
 import { TaskService } from "./services/taskService.js";
-import { EplusBrowserAdapter } from "./adapters/eplusAdapter.js";
+import { EplusBrowserAdapter, type ReviewPageData } from "./adapters/eplusAdapter.js";
 import { BrowserSessionEngine } from "./engines/browserSessionEngine.js";
 import { ProfileHarvester } from "./services/profileHarvester.js";
 import { RecordRefreshService } from "./services/recordRefresh.js";
+import { ClashControllerProvider } from "./adapters/networkRotationProvider.js";
+import { NetworkService } from "./services/networkService.js";
+import { LotteryOrchestrator } from "./services/lotteryOrchestrator.js";
+import { QueueService } from "./services/queueService.js";
+import { z } from "zod";
 import type { CreateTaskInputV2, ImportAccountsInput } from "../shared/ipc.js";
 
 export function registerIpc(
@@ -21,6 +26,21 @@ export function registerIpc(
   const eventService = new EventService(db);
   const settingsService = new SettingsService(db, secretStore);
   const taskService = new TaskService(db);
+  const network = new NetworkService(
+    {
+      detectIp: async () => {
+        const config = settingsService.getClashConfig();
+        if (!config) throw new Error("Network controller is not configured.");
+        return new ClashControllerProvider(config).detectIp();
+      },
+      rotate: async () => {
+        const config = settingsService.getClashConfig();
+        if (!config) throw new Error("Network controller is not configured.");
+        await new ClashControllerProvider(config).rotate();
+      }
+    },
+    { getSetting: (key) => db.getSetting(key) }
+  );
   const browserEngine = new BrowserSessionEngine(
     {
       executablePath: process.env.EPLUS_BROWSER_EXECUTABLE ?? process.execPath,
@@ -32,9 +52,11 @@ export function registerIpc(
     {
       captureScreenshot: async () => ({}),
       captureHtmlSnapshot: async () => ({})
-    }
+    },
+    network
   );
   const browserAdapter = new EplusBrowserAdapter(browserEngine);
+  const queueService = new QueueService(new LotteryOrchestrator(browserEngine, browserAdapter, network, db, {}), db);
   const profileHarvester = new ProfileHarvester(browserEngine, browserAdapter, db);
   const recordRefresh = new RecordRefreshService(browserEngine, browserAdapter, db);
 
@@ -54,6 +76,7 @@ export function registerIpc(
     accountService.importAccounts(input.kind, input.text)
   );
   ipcMain.handle("account:delete", (_event, id: string) => accountService.deleteAccount(id));
+  ipcMain.handle("account:reveal-password", (_event, id: string) => accountService.revealPassword(id));
   ipcMain.handle("profile:harvest", (_event, input: { accountId: string; existingSession?: boolean }) => profileHarvester.harvest(input));
   ipcMain.handle("profile:refresh", (_event, accountId: string) => profileHarvester.refreshProfile(accountId));
   ipcMain.handle("profile:refresh-application-records", (_event, accountId: string) => recordRefresh.refreshApplicationRecords(accountId));
@@ -80,17 +103,24 @@ export function registerIpc(
     if (!event) throw new Error("Event snapshot not found.");
     return taskService.createTaskV2({ ...input, event });
   });
-  ipcMain.handle("task:update-status", (_event, taskId: string, status: string) =>
-    taskService.updateTaskStatus(taskId, status as any)
-  );
-  ipcMain.handle("run:update-status", (_event, runId: string, status: string, note?: string) =>
-    taskService.updateRunStatus(runId, status as any, note)
-  );
   ipcMain.handle("run:manual-action", (event, input) => {
-    if (event.sender !== window.webContents) throw new Error("Manual actions must originate from the application window.");
-    if (!input || typeof input.runId !== "string" || !["continue", "cancel-account", "cancel-task", "reconcile-unknown"].includes(input.action)) throw new Error("Invalid manual action.");
-    return taskService.performManualAction(input);
+    assertRendererSender(event.sender, window);
+    const parsed = manualActionSchema.parse(input);
+    return queueService.performManualAction(parsed);
   });
+  ipcMain.handle("queue:enqueue-task", async (event, taskId) => {
+    assertRendererSender(event.sender, window);
+    const parsedTaskId = idSchema.parse(taskId);
+    const task = db.listTasks().find((candidate) => candidate.id === parsedTaskId);
+    if (!task) throw new Error("Task not found.");
+    if (task.status === "AwaitingConfirmation" || task.status === "Failed") taskService.updateTaskStatus(task.id, "Queued");
+    await queueService.enqueueTask(db.listTasks().find((candidate) => candidate.id === parsedTaskId) ?? task);
+  });
+  ipcMain.handle("queue:pause", async (event) => { assertRendererSender(event.sender, window); await queueService.pause(); });
+  ipcMain.handle("queue:resume", async (event) => { assertRendererSender(event.sender, window); await queueService.resume(); });
+  ipcMain.handle("queue:cancel-run", async (event, runId) => { assertRendererSender(event.sender, window); await queueService.cancelRun(idSchema.parse(runId)); });
+  ipcMain.handle("queue:cancel-task", async (event, taskId) => { assertRendererSender(event.sender, window); await queueService.cancelTask(idSchema.parse(taskId)); });
+  ipcMain.handle("queue:get-state", (event) => { assertRendererSender(event.sender, window); return queueService.getState(); });
   ipcMain.handle("submission:get-authorization", (_event, input: { taskId: string; runId: string }) => {
     const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId);
     return run ? db.getSubmissionAuthorization(run.id) ?? null : null;
@@ -119,6 +149,16 @@ export function registerIpc(
   );
   ipcMain.handle("settings:get-network", () => settingsService.getNetworkSettings());
   ipcMain.handle("settings:save-network", (_event, input) => settingsService.saveNetworkSettings(input));
+  ipcMain.handle("network:detect", async () => {
+    const config = settingsService.getClashConfig();
+    if (!config) throw new Error("Network controller is not configured.");
+    return new ClashControllerProvider(config).detectIp();
+  });
+  ipcMain.handle("network:rotate", async () => {
+    const config = settingsService.getClashConfig();
+    if (!config) throw new Error("Network controller is not configured.");
+    await new ClashControllerProvider(config).rotate();
+  });
   ipcMain.handle("log:add", (_event, message: string, level = "info", metadata = {}) =>
     db.addLog({ message, level, metadata })
   );
@@ -127,4 +167,14 @@ export function registerIpc(
   window.webContents.once("did-finish-load", () => {
     db.addLog({ level: "info", message: "Renderer loaded.", metadata: {} });
   });
+}
+
+const idSchema = z.string().trim().min(1).max(128);
+const manualActionSchema = z.object({
+  runId: idSchema,
+  action: z.enum(["continue", "cancel-account", "cancel-task", "reconcile-unknown"])
+}).strict();
+
+function assertRendererSender(sender: unknown, window: BrowserWindow): void {
+  if (sender !== window.webContents) throw new Error("IPC request must originate from the application window.");
 }

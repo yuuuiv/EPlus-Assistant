@@ -7,6 +7,7 @@ import type {
   AuditLog,
   Companion,
   CreateTaskInput,
+  CreateTaskInputV2,
   DashboardState,
   EplusRawFormSchema,
   EventOption,
@@ -25,6 +26,8 @@ import type {
   VerificationCodeReadInput,
   VerificationCodeReadResult
 } from "./types.js";
+import type { HarvestRunResult } from "../main/services/profileHarvester.js";
+import type { QueueState } from "../main/services/queueService.js";
 
 export interface AddAccountInput extends AccountInput {
   id?: string;
@@ -50,10 +53,11 @@ export interface ImportAccountsInput {
   text: string;
 }
 
-export interface CreateTaskInputV2 extends CreateTaskInput {
-  preference: LotteryPreference & {
-    daySelectionByAccountId?: Record<string, Array<"day1" | "day2">>;
-  };
+export interface IpIdentity {
+  ip: string;
+  region: string;
+  country: string;
+  city?: string;
 }
 
 export interface ElectronApi {
@@ -65,11 +69,24 @@ export interface ElectronApi {
   saveEventSnapshot(input: EventSnapshotInput): Promise<EventSnapshot>;
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
   createTaskV2(input: CreateTaskInputV2): Promise<{ taskId: string }>;
+  /** Deprecated: the main process deliberately does not register this privileged mutation channel. */
   updateTaskStatus(taskId: string, status: string): Promise<void>;
+  /** Deprecated: the main process deliberately does not register this privileged mutation channel. */
   updateRunStatus(runId: string, status: string, note?: string): Promise<void>;
+  enqueueTask(taskId: string): Promise<void>;
+  pauseQueue(): Promise<void>;
+  resumeQueue(): Promise<void>;
+  cancelRun(runId: string): Promise<void>;
+  cancelTask(taskId: string): Promise<void>;
+  getQueueState(): Promise<QueueState>;
   revealPassword(accountId: string): Promise<PasswordRevealResponse>;
   performManualAction(input: ManualActionInput): Promise<void>;
   getAuthorization(input: { taskId: string; runId: string }): Promise<SubmissionAuthorization | null>;
+  harvestProfile(input: { accountId: string; existingSession?: boolean }): Promise<HarvestRunResult>;
+  refreshProfile(accountId: string): Promise<HarvestRunResult>;
+  refreshApplicationRecords(accountId: string): Promise<ApplicationRecord[]>;
+  refreshLotteryResults(accountId: string): Promise<LotteryResultRecord[]>;
+  reconcileSubmission(input: { taskId: string; runId: string }): Promise<"Submitted" | "AlreadyApplied" | "Failed">;
   listProfiles(accountId: string): Promise<AccountProfile | undefined>;
   listCompanions(accountId: string): Promise<Companion[]>;
   listApplicationRecords(accountId: string, filter?: Record<string, unknown>): Promise<ApplicationRecord[]>;
@@ -79,6 +96,8 @@ export interface ElectronApi {
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
   getNetworkSettings(): Promise<NetworkSettings>;
   saveNetworkSettings(input: NetworkSettingsUpdate): Promise<NetworkSettings>;
+  detectIp(): Promise<IpIdentity>;
+  rotateIp(): Promise<void>;
   addLog(message: string, level?: "info" | "warn" | "error", metadata?: Record<string, unknown>): Promise<void>;
   openDataFolder(): Promise<void>;
 }
@@ -112,5 +131,6 @@ export type {
   VerificationMailboxSettings,
   VerificationMailboxUpdate,
   NetworkSettings,
-  NetworkSettingsUpdate
+  NetworkSettingsUpdate,
+  CreateTaskInputV2
 };

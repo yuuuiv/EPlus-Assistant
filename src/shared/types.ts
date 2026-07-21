@@ -376,6 +376,11 @@ export interface CreateTaskInput {
   accountIds: string[];
 }
 
+export interface CreateTaskInputV2 extends CreateTaskInput {
+  confirmationPolicy: "required" | "disabled";
+  automationRiskAcknowledgement?: AutomationRiskAcknowledgement;
+}
+
 export interface ManualActionInput {
   runId: string;
   action: "continue" | "cancel-account" | "cancel-task" | "reconcile-unknown";
