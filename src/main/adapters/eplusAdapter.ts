@@ -1,6 +1,14 @@
-import type { EventOption, LotteryPreference } from "../../shared/types.js";
+import type { ApplicationRecord, EventOption, LotteryPreference, LotteryResultRecord } from "../../shared/types.js";
 import { BrowserEngineFailure, BrowserSessionEngine } from "../engines/browserSessionEngine.js";
 import type { PageState } from "../engines/pageStateClassifier.js";
+import {
+  parseApplicationRecords,
+  parseCompanions,
+  parseLotteryResults,
+  parseMemberProfile,
+  type CompanionData,
+  type MemberProfileData
+} from "./eplusMemberPageParser.js";
 
 export interface ReviewPageData {
   readonly state: PageState;
@@ -12,6 +20,13 @@ export interface ReceiptData {
   readonly url: string;
   readonly receiptText: string;
 }
+
+export type { CompanionData, MemberProfileData } from "./eplusMemberPageParser.js";
+
+const MEMBER_PROFILE_URL = "https://member.eplus.jp/";
+const COMPANION_MANAGEMENT_URL = "https://member.eplus.jp/companion/";
+const APPLICATION_HISTORY_URL = "https://member.eplus.jp/history/";
+const LOTTERY_RESULTS_URL = "https://member.eplus.jp/lottery-result/";
 
 const LOGIN_EMAIL_SELECTOR = "input[type='email'], input[name*='mail'], input[id*='mail']";
 const LOGIN_PASSWORD_SELECTOR = "input[type='password']";
@@ -78,6 +93,10 @@ export class EplusBrowserAdapter {
           await page.locator("select").first().selectOption(String(entry.quantity));
         }
         await page.locator(`[value='${preference.paymentMethodId}']`).check();
+        const unsafePaymentField = page.locator("input[autocomplete='cc-number'], input[autocomplete='cc-csc'], input[name*='card'], input[name*='cvv'], input[name*='expiry']");
+        if (await unsafePaymentField.count()) {
+          throw new BrowserEngineFailure("ManualTakeoverRequired", "Card payment details require manual entry.");
+        }
       }
     });
   }
@@ -106,6 +125,49 @@ export class EplusBrowserAdapter {
       throw new BrowserEngineFailure("ProhibitedAction", `Receipt data is unavailable while the page is ${state}.`);
     }
     return { url: this.engine.getCurrentUrl(), receiptText: stripHtml(await this.engine.getCurrentHtml()) };
+  }
+
+  async openMemberProfile(): Promise<void> {
+    await this.openMemberPage(MEMBER_PROFILE_URL);
+  }
+
+  async openCompanionManagement(): Promise<void> {
+    await this.openMemberPage(COMPANION_MANAGEMENT_URL);
+  }
+
+  async openApplicationHistory(): Promise<void> {
+    await this.openMemberPage(APPLICATION_HISTORY_URL);
+  }
+
+  async openLotteryResults(): Promise<void> {
+    await this.openMemberPage(LOTTERY_RESULTS_URL);
+  }
+
+  async readMemberProfile(): Promise<MemberProfileData> {
+    return parseMemberProfile(await this.engine.getCurrentHtml());
+  }
+
+  async readCompanions(): Promise<CompanionData> {
+    return parseCompanions(await this.engine.getCurrentHtml());
+  }
+
+  async readApplicationHistory(): Promise<readonly Omit<ApplicationRecord, "id" | "accountId" | "harvestedAt">[]> {
+    return parseApplicationRecords(await this.engine.getCurrentHtml());
+  }
+
+  async readLotteryResults(): Promise<readonly Omit<LotteryResultRecord, "id" | "accountId" | "harvestedAt">[]> {
+    return parseLotteryResults(await this.engine.getCurrentHtml());
+  }
+
+  private async openMemberPage(url: string): Promise<void> {
+    await this.engine.navigate(url);
+    const state = await this.engine.evaluateState();
+    if (state.requiresManualTakeover) {
+      const html = await this.engine.getCurrentHtml();
+      if (/captcha|電話番号認証が必要/iu.test(html) || state.state !== "Unknown") {
+        throw new BrowserEngineFailure("ManualTakeoverRequired", `Manual takeover is required for ${state.state}.`);
+      }
+    }
   }
 
   private async requireAutomatableState(): Promise<PageState> {

@@ -20,7 +20,7 @@ describe("AppDatabase migrations", () => {
     const database = new AppDatabase(directory, dbFile);
     await database.open();
 
-    expect(database.getSetting<number>("schema_version")).toBe(2);
+    expect(database.getSetting<number>("schema_version")).toBe(4);
     expect(database.listAccounts()).toHaveLength(1);
     expect(database.listAccounts()[0]?.eplusEmail).toBe("saved@example.test");
     expect(await hasTable(dbFile, "artifact_manifests")).toBe(true);
