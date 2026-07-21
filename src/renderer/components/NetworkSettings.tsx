@@ -1,0 +1,15 @@
+import { RefreshCw, RotateCw, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { IpIdentity, NetworkSettings as NetworkSettingsData } from "../../shared/ipc.js";
+
+interface NetworkSettingsProps { readonly initial: NetworkSettingsData; readonly onSaved: (settings: NetworkSettingsData) => void; readonly onMessage: (message: string) => void; }
+
+export function NetworkSettingsPanel(props: NetworkSettingsProps) {
+  const [form, setForm] = useState({ ...props.initial, secret: "" });
+  const [identity, setIdentity] = useState<IpIdentity>();
+  useEffect(() => setForm({ ...props.initial, secret: "" }), [props.initial]);
+  async function save(): Promise<void> { const saved = await window.eplusApi.saveNetworkSettings(form); props.onSaved(saved); setForm({ ...saved, secret: "" }); props.onMessage("网络设置已保存。"); }
+  async function detect(): Promise<void> { setIdentity(await window.eplusApi.detectIp()); }
+  async function rotate(): Promise<void> { await window.eplusApi.rotateIp(); await detect(); props.onMessage("已请求切换 IP。"); }
+  return <section className="workspace-panel" aria-labelledby="network-title"><div className="workspace-heading"><div><p className="section-kicker">设置</p><h1 id="network-title">网络设置</h1><p>连接 Clash 控制器，检测或切换任务使用的出口 IP。</p></div></div><section className="panel-card"><div className="panel-head"><h2><ShieldCheck size={16} />Clash 控制器</h2><span className="muted">仅支持 Clash 控制器</span></div><div className="form-grid"><label>控制器主机<input value={form.host} placeholder="例如：127.0.0.1" onChange={(event) => setForm({ ...form, host: event.target.value })} /></label><label>控制器端口<input type="number" min="1" value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} /></label><label>控制器密钥<input type="password" value={form.secret} placeholder={form.secretConfigured ? "已保存，留空则不变" : "切换 IP 需要密钥"} onChange={(event) => setForm({ ...form, secret: event.target.value })} /></label><label>代理组<input value={form.proxyGroup} onChange={(event) => setForm({ ...form, proxyGroup: event.target.value })} /></label><label>要求国家<input value={form.requiredCountry} placeholder="例如：Japan" onChange={(event) => setForm({ ...form, requiredCountry: event.target.value })} /></label><label>网络策略<input value={form.policy} onChange={(event) => setForm({ ...form, policy: event.target.value })} /></label></div><div className="network-identity">{identity ? <span>{identity.ip} · {identity.country}, {identity.region}{identity.city ? `, ${identity.city}` : ""}</span> : <span className="muted">尚未检测出口 IP。</span>}<span className="privacy-note">IP 查询会发送至第三方服务 ip-api.com。若不接受此披露，请不要使用检测功能。</span></div><div className="actions"><button type="button" className="icon-button" onClick={() => { void detect(); }}><RefreshCw size={16} />检测 IP</button><button type="button" className="icon-button" disabled={!form.secretConfigured && !form.secret} onClick={() => { void rotate(); }}><RotateCw size={16} />切换 IP</button><button type="button" className="primary" onClick={() => { void save(); }}>保存网络设置</button></div></section></section>;
+}
