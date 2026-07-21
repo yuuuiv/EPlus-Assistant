@@ -3,13 +3,19 @@ import type {
   VerificationCodeReadInput,
   VerificationCodeReadResult,
   VerificationMailboxSettings,
-  VerificationMailboxUpdate
+  VerificationMailboxUpdate,
+  NetworkSettings,
+  NetworkSettingsUpdate
 } from "../../shared/types.js";
+import type { ClashConfig } from "../adapters/networkRotationProvider.js";
 import { createMailProvider, type MailProviderConfig } from "../adapters/mailProviders.js";
 import type { AppDatabase } from "../storage/database.js";
 import type { SecretStore } from "../storage/secretStore.js";
 
 const SETTING_KEY = "verification_mailbox";
+const NETWORK_SETTING_KEY = "network";
+const NETWORK_SECRET_SETTING_KEY = "network_controller_secret";
+const supportedMailboxModes = ["manual", "temp-mail-forwarder", "auth-mailbox"] as const;
 
 interface StoredVerificationMailbox {
   publicConfig: VerificationMailboxSettings;
@@ -32,6 +38,15 @@ const defaultVerificationMailbox: VerificationMailboxSettings = {
   secretConfigured: false
 };
 
+const defaultNetworkSettings: NetworkSettings = {
+  host: "",
+  port: 9090,
+  proxyGroup: "",
+  requiredCountry: "Japan",
+  policy: "required",
+  secretConfigured: false
+};
+
 export class SettingsService {
   constructor(
     private readonly db: AppDatabase,
@@ -43,6 +58,9 @@ export class SettingsService {
   }
 
   saveVerificationMailbox(input: VerificationMailboxUpdate): VerificationMailboxSettings {
+    if (!isSupportedMailboxMode(input.mode)) {
+      throw new Error("不支持 IMAP 或 HTTP API 邮箱模式。请选择 manual、temp-mail-forwarder 或 auth-mailbox。");
+    }
     const existing = this.db.getSetting<StoredVerificationMailbox>(SETTING_KEY);
     const trimmedSecret = {
       password: input.password?.trim() || undefined,
@@ -72,6 +90,35 @@ export class SettingsService {
     return publicConfig;
   }
 
+  getNetworkSettings(): NetworkSettings {
+    return this.db.getSetting<NetworkSettings>(NETWORK_SETTING_KEY) ?? defaultNetworkSettings;
+  }
+
+  saveNetworkSettings(input: NetworkSettingsUpdate): NetworkSettings {
+    const existing = this.getNetworkSettings();
+    const secret = input.secret?.trim();
+    const settings: NetworkSettings = {
+      host: input.host.trim(),
+      port: Math.max(1, Math.floor(Number(input.port) || defaultNetworkSettings.port)),
+      proxyGroup: input.proxyGroup.trim(),
+      requiredCountry: input.requiredCountry.trim(),
+      policy: input.policy.trim() || defaultNetworkSettings.policy,
+      secretConfigured: Boolean(secret) || existing.secretConfigured,
+      updatedAt: new Date().toISOString()
+    };
+    if (secret) this.db.setSetting(NETWORK_SECRET_SETTING_KEY, this.secretStore.encryptString(secret));
+    this.db.setSetting(NETWORK_SETTING_KEY, settings);
+    this.db.addLog({ level: "info", message: "network.settings.updated", metadata: { host: settings.host, port: settings.port, proxyGroup: settings.proxyGroup, requiredCountry: settings.requiredCountry, policy: settings.policy, secret: "[redacted]" } });
+    return settings;
+  }
+
+  getClashConfig(): ClashConfig | undefined {
+    const settings = this.getNetworkSettings();
+    const encryptedSecret = this.db.getSetting<string>(NETWORK_SECRET_SETTING_KEY);
+    if (!settings.host || !settings.proxyGroup || !encryptedSecret) return undefined;
+    return { host: settings.host, port: settings.port, secret: this.secretStore.decryptString(encryptedSecret), proxyGroup: settings.proxyGroup };
+  }
+
   async testVerificationMailbox(): Promise<ValidationResult> {
     const settings = this.getVerificationMailbox();
     try {
@@ -98,7 +145,6 @@ export class SettingsService {
         recipient: input.recipient?.trim() || settings.mailboxAddress,
         startedAt,
         timeoutMs: Math.max(3000, input.timeoutMs ?? settings.timeoutMs),
-        pollingIntervalMs: settings.pollingIntervalMs,
         senderAllowlist: settings.senderAllowlist,
         subjectMatchers
       });
@@ -115,9 +161,12 @@ export class SettingsService {
     if (settings.mode !== "manual" && !settings.mailboxAddress) {
       return { ok: false, message: "请填写用于接收验证码的总邮箱地址。" };
     }
-    const provider = createMailProvider(settings.mode, this.toProviderConfig(settings, secret));
     const syncResult = validateProviderConfigSync(settings, secret);
-    return syncResult?.ok === false ? syncResult : provider.validate(this.toProviderConfig(settings, secret));
+    if (syncResult?.ok === false) {
+      return syncResult;
+    }
+    const provider = createMailProvider(settings.mode, this.toProviderConfig(settings, secret));
+    return provider.validate(this.toProviderConfig(settings, secret));
   }
 
   private toProviderConfig(
@@ -126,7 +175,7 @@ export class SettingsService {
   ): MailProviderConfig {
     return {
       providerId: settings.providerId,
-      endpoint: settings.endpoint,
+      apiEndpoint: settings.endpoint,
       mailboxAddress: settings.mailboxAddress,
       username: settings.username,
       password: secret.password,
@@ -152,20 +201,24 @@ function validateProviderConfigSync(
   settings: VerificationMailboxSettings,
   secret: VerificationMailboxSecretConfig
 ): ValidationResult | undefined {
+  if (!isSupportedMailboxMode(settings.mode)) {
+    return { ok: false, message: "不支持 IMAP 或 HTTP API 邮箱模式。请选择 manual、temp-mail-forwarder 或 auth-mailbox。" };
+  }
   if (settings.mode === "manual") {
     return { ok: true, message: "当前为手动输入验证码模式。" };
   }
-  if (!settings.endpoint && ["http-api", "temp-mail-forwarder", "auth-mailbox"].includes(settings.mode)) {
+  if (!settings.endpoint) {
     return { ok: false, message: "请填写邮箱读取服务 endpoint。" };
   }
-  if (!secret.apiToken && ["http-api", "temp-mail-forwarder", "auth-mailbox"].includes(settings.mode)) {
+  if (!secret.apiToken && !secret.password) {
     return { ok: false, message: "请在 API token 中填写读取凭证。" };
   }
   if (settings.mode === "auth-mailbox" && !settings.providerId) {
     return { ok: false, message: "auth mailbox 模式需要在 Provider ID 中填写 app_id。" };
   }
-  if (settings.mode === "imap") {
-    return { ok: false, message: "IMAP 本地协议客户端尚未接入，请使用 temp-mail forwarder、auth mailbox 或 HTTP API。" };
-  }
   return { ok: true, message: "验证码邮箱配置有效，可尝试读取验证码。" };
+}
+
+function isSupportedMailboxMode(mode: VerificationMailboxUpdate["mode"]): mode is typeof supportedMailboxModes[number] {
+  return supportedMailboxModes.some((supportedMode) => supportedMode === mode);
 }

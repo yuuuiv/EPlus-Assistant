@@ -22,6 +22,8 @@ const api: ElectronApi = {
   saveVerificationMailbox: (input) => ipcRenderer.invoke("settings:save-verification-mailbox", input),
   testVerificationMailbox: () => ipcRenderer.invoke("settings:test-verification-mailbox"),
   readVerificationCode: (input) => ipcRenderer.invoke("settings:read-verification-code", input),
+  getNetworkSettings: () => ipcRenderer.invoke("settings:get-network"),
+  saveNetworkSettings: (input) => ipcRenderer.invoke("settings:save-network", input),
   addLog: (message, level, metadata) => ipcRenderer.invoke("log:add", message, level, metadata),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };

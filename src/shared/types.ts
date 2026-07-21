@@ -162,6 +162,25 @@ export interface NetworkLease {
   expiresAt: string;
 }
 
+export interface NetworkSettings {
+  host: string;
+  port: number;
+  proxyGroup: string;
+  requiredCountry: string;
+  policy: string;
+  secretConfigured: boolean;
+  updatedAt?: string;
+}
+
+export interface NetworkSettingsUpdate {
+  host: string;
+  port: number;
+  secret?: string;
+  proxyGroup: string;
+  requiredCountry: string;
+  policy: string;
+}
+
 export interface PasswordRevealRequest {
   accountId: string;
   senderWindowId: string;
@@ -347,6 +366,7 @@ export interface DashboardState {
   runs: AccountRun[];
   logs: AuditLog[];
   verificationMailbox: VerificationMailboxSettings;
+  network: NetworkSettings;
   dataDir: string;
 }
 

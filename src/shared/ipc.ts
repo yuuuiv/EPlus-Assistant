@@ -20,6 +20,8 @@ import type {
   ValidationResult,
   VerificationMailboxSettings,
   VerificationMailboxUpdate,
+  NetworkSettings,
+  NetworkSettingsUpdate,
   VerificationCodeReadInput,
   VerificationCodeReadResult
 } from "./types.js";
@@ -75,6 +77,8 @@ export interface ElectronApi {
   saveVerificationMailbox(input: VerificationMailboxUpdate): Promise<VerificationMailboxSettings>;
   testVerificationMailbox(): Promise<ValidationResult>;
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
+  getNetworkSettings(): Promise<NetworkSettings>;
+  saveNetworkSettings(input: NetworkSettingsUpdate): Promise<NetworkSettings>;
   addLog(message: string, level?: "info" | "warn" | "error", metadata?: Record<string, unknown>): Promise<void>;
   openDataFolder(): Promise<void>;
 }
@@ -106,5 +110,7 @@ export type {
   VerificationCodeReadInput,
   VerificationCodeReadResult,
   VerificationMailboxSettings,
-  VerificationMailboxUpdate
+  VerificationMailboxUpdate,
+  NetworkSettings,
+  NetworkSettingsUpdate
 };

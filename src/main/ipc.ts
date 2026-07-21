@@ -25,6 +25,7 @@ export function registerIpc(
     runs: taskService.listRuns(),
     logs: db.listLogs(),
     verificationMailbox: settingsService.getVerificationMailbox(),
+    network: settingsService.getNetworkSettings(),
     dataDir: db.getDataDir()
   }));
 
@@ -63,6 +64,8 @@ export function registerIpc(
   ipcMain.handle("settings:read-verification-code", (_event, input) =>
     settingsService.readVerificationCode(input)
   );
+  ipcMain.handle("settings:get-network", () => settingsService.getNetworkSettings());
+  ipcMain.handle("settings:save-network", (_event, input) => settingsService.saveNetworkSettings(input));
   ipcMain.handle("log:add", (_event, message: string, level = "info", metadata = {}) =>
     db.addLog({ message, level, metadata })
   );

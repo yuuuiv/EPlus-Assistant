@@ -1,15 +1,16 @@
 import type { ValidationResult, VerificationMailboxMode } from "../../shared/types.js";
 
-export interface MailProviderConfig {
-  providerId?: string;
-  endpoint?: string;
-  mailboxAddress?: string;
+export interface MailConfig {
+  apiEndpoint?: string;
+  apiToken?: string;
   username?: string;
   password?: string;
-  apiToken?: string;
+  providerId?: string;
+  mailboxAddress?: string;
   pollingIntervalMs?: number;
-  agentParsedMails?: boolean;
 }
+
+export type MailProviderConfig = MailConfig;
 
 export interface VerificationMailMessage {
   id?: string;
@@ -21,19 +22,26 @@ export interface VerificationMailMessage {
   html?: string;
 }
 
+export interface VerificationCodeCandidate {
+  code: string;
+  receivedAt: string;
+  sender: string;
+  subject: string;
+}
+
 export interface VerificationCodeResult {
   code?: string;
+  candidates?: VerificationCodeCandidate[];
   manualActionRequired: boolean;
   reason: string;
 }
 
 export interface MailProvider {
-  validate(config: MailProviderConfig): Promise<ValidationResult>;
+  validate(config: MailConfig): Promise<ValidationResult>;
   waitForVerificationCode(input: {
     recipient: string;
     startedAt: Date;
     timeoutMs: number;
-    pollingIntervalMs: number;
     senderAllowlist: string[];
     subjectMatchers: RegExp[];
   }): Promise<VerificationCodeResult>;
@@ -78,16 +86,16 @@ interface RawMailboxMessage extends Record<string, unknown> {
 
 export class HttpJsonMailProvider implements MailProvider {
   constructor(
-    protected readonly config: MailProviderConfig,
+    protected readonly config: MailConfig,
     private readonly fetcher: MailboxFetch = fetch
   ) {}
 
-  async validate(config: MailProviderConfig = this.config): Promise<ValidationResult> {
-    if (!config.endpoint) {
-      return { ok: false, message: "HTTP 邮箱适配器需要 endpoint。" };
+  async validate(config: MailConfig = this.config): Promise<ValidationResult> {
+    if (!config.apiEndpoint) {
+      return { ok: false, message: "cerise-bouquet 邮箱适配器需要 endpoint。" };
     }
     try {
-      const url = new URL(config.endpoint);
+      const url = new URL(config.apiEndpoint);
       if (!/^https?:$/.test(url.protocol)) {
         return { ok: false, message: "Endpoint 必须是 http 或 https 地址。" };
       }
@@ -98,16 +106,15 @@ export class HttpJsonMailProvider implements MailProvider {
       return { ok: false, message: "请填写用于接收验证码的总邮箱地址。" };
     }
     if (!config.apiToken && !config.password) {
-      return { ok: false, message: "HTTP 邮箱适配器需要 API token 或密码。" };
+      return { ok: false, message: "cerise-bouquet 邮箱适配器需要 API token 或密码。" };
     }
-    return { ok: true, message: "HTTP 邮箱适配器配置有效。" };
+    return { ok: true, message: "cerise-bouquet 邮箱适配器配置有效。" };
   }
 
   async waitForVerificationCode(input: {
     recipient: string;
     startedAt: Date;
     timeoutMs: number;
-    pollingIntervalMs: number;
     senderAllowlist: string[];
     subjectMatchers: RegExp[];
   }): Promise<VerificationCodeResult> {
@@ -116,114 +123,84 @@ export class HttpJsonMailProvider implements MailProvider {
       return { manualActionRequired: true, reason: validation.message };
     }
 
-    const started = Date.now();
-    const deadline = started + input.timeoutMs;
-    let backoffMs = Math.max(1000, input.pollingIntervalMs || this.config.pollingIntervalMs || 5000);
+    const deadline = Date.now() + input.timeoutMs;
+    const pollingIntervalMs = Math.max(1000, this.config.pollingIntervalMs ?? 5000);
     let lastReason = "未收到符合条件的验证码邮件。";
 
     while (Date.now() <= deadline) {
-      const { messages, retryAfterMs } = await this.fetchMessages(input.recipient, input.startedAt);
-      if (retryAfterMs) {
-        backoffMs = Math.min(Math.max(backoffMs * 2, retryAfterMs), 60000);
-        await delay(Math.min(backoffMs, Math.max(0, deadline - Date.now())));
-        continue;
-      }
+      const messages = await this.fetchMessages(input.recipient, input.startedAt);
       const candidates = messages
         .filter((message) => isAllowedSender(message.from, input.senderAllowlist))
         .filter((message) => message.receivedAt >= input.startedAt)
         .filter((message) => message.to.length === 0 || message.to.some((recipient) => sameMailbox(recipient, input.recipient)))
-        .filter((message) => input.subjectMatchers.some((matcher) => matcher.test(message.subject)));
-
-      const matches = candidates
+        .filter((message) => input.subjectMatchers.some((matcher) => matchesSubject(matcher, message.subject)))
         .map((message) => ({ message, code: extractVerificationCodeFromMessage(message) }))
         .filter((item): item is { message: VerificationMailMessage; code: string } => Boolean(item.code));
 
-      if (matches.length === 1) {
-        return { code: matches[0].code, manualActionRequired: false, reason: "已从验证码邮箱读取验证码。" };
+      if (candidates.length === 1) {
+        return {
+          code: candidates[0].code,
+          candidates: candidates.map(toCandidateMetadata),
+          manualActionRequired: false,
+          reason: "已从验证码邮箱读取验证码。"
+        };
       }
-      if (matches.length > 1) {
-        return { manualActionRequired: true, reason: "发现多封候选验证码邮件，请人工确认。" };
+      if (candidates.length > 1) {
+        return {
+          candidates: candidates.map(toCandidateMetadata),
+          manualActionRequired: true,
+          reason: "发现多封候选验证码邮件，请人工确认。"
+        };
       }
-      lastReason = candidates.length > 0 ? "候选邮件中没有可安全提取的验证码。" : lastReason;
-      await delay(Math.min(backoffMs, Math.max(0, deadline - Date.now())));
+      lastReason = messages.length > 0 ? "候选邮件中没有可安全提取的验证码。" : lastReason;
+      await delay(Math.min(pollingIntervalMs, Math.max(0, deadline - Date.now())));
     }
 
     return { manualActionRequired: true, reason: lastReason };
   }
 
-  private async fetchMessages(
-    recipient: string,
-    startedAt: Date
-  ): Promise<{ messages: VerificationMailMessage[]; retryAfterMs?: number }> {
-    const endpoint = this.buildEndpoint(recipient, startedAt);
-
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.config.apiToken) {
-      headers.Authorization = `Bearer ${this.config.apiToken}`;
-    }
-    if (this.config.agentParsedMails && this.config.password) {
-      headers["x-custom-auth"] = this.config.password;
-    } else if (!this.config.apiToken && this.config.password) {
-      headers.Authorization = `Basic ${Buffer.from(`${this.config.username ?? recipient}:${this.config.password}`).toString("base64")}`;
-    }
-
-    const response = await this.fetcher(endpoint, { headers });
+  private async fetchMessages(recipient: string, startedAt: Date): Promise<VerificationMailMessage[]> {
+    const response = await this.fetcher(this.buildEndpoint(recipient, startedAt), {
+      headers: this.buildHeaders(recipient)
+    });
     if (response.status === 401) {
       throw new Error("邮箱 API 鉴权失败：Address JWT 无效或已过期。");
-    }
-    if (response.status === 429) {
-      const retryAfter = Number.parseInt(response.headers.get("retry-after") || "", 10);
-      return {
-        messages: [],
-        retryAfterMs: Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined
-      };
     }
     if (!response.ok) {
       throw new Error(`邮箱 API 请求失败：HTTP ${response.status}`);
     }
-    const json = await response.json();
-    return { messages: normalizeMailboxResponse(json) };
+    return normalizeMailboxResponse(await response.json());
   }
 
   protected buildEndpoint(recipient: string, startedAt: Date): URL {
-    const endpoint = new URL(this.config.endpoint!);
-    if (this.config.agentParsedMails) {
-      const basePath = endpoint.pathname.replace(/\/$/, "");
-      if (!basePath.endsWith("/api/parsed_mails")) {
-        endpoint.pathname = `${basePath}/api/parsed_mails`.replace(/\/+/g, "/");
-      }
-      endpoint.searchParams.set("limit", endpoint.searchParams.get("limit") ?? "50");
-      endpoint.searchParams.set("offset", endpoint.searchParams.get("offset") ?? "0");
-      return endpoint;
-    }
-    endpoint.searchParams.set("recipient", recipient);
-    endpoint.searchParams.set("since", startedAt.toISOString());
+    const endpoint = new URL(this.config.apiEndpoint ?? "");
+    const basePath = endpoint.pathname.replace(/\/$/, "");
+    endpoint.pathname = `${basePath}/api/parsed_mails`.replace(/\/+/g, "/");
+    endpoint.searchParams.set("limit", endpoint.searchParams.get("limit") ?? "50");
+    endpoint.searchParams.set("offset", endpoint.searchParams.get("offset") ?? "0");
     return endpoint;
+  }
+
+  protected buildHeaders(recipient: string): Record<string, string> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.config.apiToken) {
+      headers.Authorization = `Bearer ${this.config.apiToken}`;
+    }
+    if (this.config.password) {
+      headers["x-custom-auth"] = this.config.password;
+    }
+    return headers;
   }
 }
 
 export class AuthMailboxProvider extends HttpJsonMailProvider {
-  constructor(config: MailProviderConfig, fetcher?: MailboxFetch) {
-    super({ ...config, agentParsedMails: false }, fetcher);
-  }
-
-  override async validate(config: MailProviderConfig = this.config): Promise<ValidationResult> {
-    if (!config.endpoint) {
-      return { ok: false, message: "auth mailbox 模式需要填写 auth 服务 endpoint。" };
-    }
-    try {
-      const url = new URL(config.endpoint);
-      if (!/^https?:$/.test(url.protocol)) {
-        return { ok: false, message: "auth 服务 endpoint 必须是 http 或 https 地址。" };
-      }
-    } catch {
-      return { ok: false, message: "auth 服务 endpoint 不是有效 URL。" };
+  override async validate(config: MailConfig = this.config): Promise<ValidationResult> {
+    const baseValidation = await super.validate(config);
+    if (!baseValidation.ok) {
+      return baseValidation;
     }
     if (!config.providerId) {
       return { ok: false, message: "auth mailbox 模式需要在 Provider ID 中填写 app_id。" };
-    }
-    if (!config.mailboxAddress) {
-      return { ok: false, message: "auth mailbox 模式需要填写总邮箱地址。" };
     }
     if (!config.apiToken) {
       return { ok: false, message: "auth mailbox 模式需要填写统一账户 JWT 到 API token。" };
@@ -232,54 +209,31 @@ export class AuthMailboxProvider extends HttpJsonMailProvider {
   }
 
   protected override buildEndpoint(recipient: string): URL {
-    const endpoint = new URL(this.config.endpoint!);
+    const endpoint = new URL(this.config.apiEndpoint ?? "");
     endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/api/temp-mail/mails`.replace(/\/+/g, "/");
-    endpoint.searchParams.set("app_id", this.config.providerId!);
+    endpoint.searchParams.set("app_id", this.config.providerId ?? "");
     endpoint.searchParams.set("limit", endpoint.searchParams.get("limit") ?? "50");
     endpoint.searchParams.set("offset", endpoint.searchParams.get("offset") ?? "0");
-    if (recipient) {
-      endpoint.searchParams.set("address", recipient);
-    }
+    endpoint.searchParams.set("address", recipient);
     return endpoint;
-  }
-}
-
-export class UnsupportedAutomaticMailProvider implements MailProvider {
-  constructor(private readonly mode: VerificationMailboxMode) {}
-
-  async validate(): Promise<ValidationResult> {
-    return {
-      ok: false,
-      message: `${this.mode} 尚未接入本地协议客户端，请使用 HTTP API/forwarder/auth 服务或手动输入。`
-    };
-  }
-
-  async waitForVerificationCode(): Promise<VerificationCodeResult> {
-    return {
-      manualActionRequired: true,
-      reason: `${this.mode} 尚未接入本地协议客户端，请人工输入验证码。`
-    };
   }
 }
 
 export function createMailProvider(
   mode: VerificationMailboxMode,
-  config: MailProviderConfig,
+  config: MailConfig,
   fetcher?: MailboxFetch
 ): MailProvider {
   if (mode === "manual") {
     return new ManualMailProvider();
   }
   if (mode === "temp-mail-forwarder") {
-    return new HttpJsonMailProvider({ ...config, agentParsedMails: true }, fetcher);
+    return new HttpJsonMailProvider(config, fetcher);
   }
   if (mode === "auth-mailbox") {
     return new AuthMailboxProvider(config, fetcher);
   }
-  if (mode === "http-api") {
-    return new HttpJsonMailProvider(config, fetcher);
-  }
-  return new UnsupportedAutomaticMailProvider(mode);
+  throw new Error(`不支持 ${mode} 邮箱模式。请选择 manual、temp-mail-forwarder 或 auth-mailbox。`);
 }
 
 export function extractVerificationCodeFromMessage(message: VerificationMailMessage): string | undefined {
@@ -303,20 +257,23 @@ export function extractVerificationCodeFromMessage(message: VerificationMailMess
   return undefined;
 }
 
+function toCandidateMetadata(item: { message: VerificationMailMessage; code: string }): VerificationCodeCandidate {
+  return {
+    code: item.code,
+    receivedAt: item.message.receivedAt.toISOString(),
+    sender: item.message.from,
+    subject: item.message.subject
+  };
+}
+
 function normalizeMailboxResponse(json: unknown): VerificationMailMessage[] {
-  const rawMessages = Array.isArray(json)
-    ? json
-    : Array.isArray((json as { results?: unknown }).results)
-      ? (json as { results: unknown[] }).results
-      : Array.isArray((json as { mails?: unknown }).mails)
-        ? (json as { mails: unknown[] }).mails
-        : Array.isArray((json as { messages?: unknown }).messages)
-          ? (json as { messages: unknown[] }).messages
-          : Array.isArray((json as { data?: unknown }).data)
-            ? (json as { data: unknown[] }).data
-            : Array.isArray((json as { items?: unknown }).items)
-              ? (json as { items: unknown[] }).items
-              : [];
+  const container = json && typeof json === "object" ? json as Record<string, unknown> : {};
+  const mailboxKeys = ["results", "mails", "messages", "data", "items"];
+  const messagesKey = mailboxKeys.find((key) => Array.isArray(container[key]));
+  const rawMessages = Array.isArray(json) ? json : messagesKey ? container[messagesKey] : [];
+  if (!Array.isArray(rawMessages)) {
+    return [];
+  }
   return rawMessages.map(normalizeMessage).filter((message): message is VerificationMailMessage => Boolean(message));
 }
 
@@ -325,9 +282,7 @@ function normalizeMessage(raw: unknown): VerificationMailMessage | undefined {
     return undefined;
   }
   const message = raw as RawMailboxMessage;
-  const receivedAt = parseMailDate(
-    message.receivedAt ?? message.received_at ?? message.createdAt ?? message.created_at ?? message.date ?? message.timestamp
-  );
+  const receivedAt = parseMailDate(message.receivedAt ?? message.received_at ?? message.createdAt ?? message.created_at ?? message.date ?? message.timestamp);
   const from = String(message.sender ?? message.source ?? message.from ?? message.from_address ?? "").trim();
   const subject = String(message.subject ?? "").trim();
   if (!receivedAt || !from || !subject) {
@@ -345,25 +300,14 @@ function normalizeMessage(raw: unknown): VerificationMailMessage | undefined {
 }
 
 function normalizeRecipients(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map(String).map((item) => item.trim()).filter(Boolean);
-  }
-  return String(value ?? "")
-    .split(/[;,]/)
+  return (Array.isArray(value) ? value.map(String) : String(value ?? "").split(/[;,]/))
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
 function parseMailDate(value: unknown): Date | undefined {
-  if (typeof value === "number") {
-    const timestamp = value < 10_000_000_000 ? value * 1000 : value;
-    return new Date(timestamp);
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-  }
-  return undefined;
+  const timestamp = typeof value === "number" ? (value < 10_000_000_000 ? value * 1000 : value) : Date.parse(String(value ?? ""));
+  return Number.isNaN(timestamp) ? undefined : new Date(timestamp);
 }
 
 function stringifyMaybe(value: unknown): string | undefined {
@@ -387,6 +331,11 @@ function isAllowedSender(sender: string, allowlist: string[]): boolean {
   }
   const domain = sender.toLowerCase().split("@").pop()?.replace(/[>\s]/g, "") ?? "";
   return allowlist.some((allowed) => domain === allowed.toLowerCase() || domain.endsWith(`.${allowed.toLowerCase()}`));
+}
+
+function matchesSubject(matcher: RegExp, subject: string): boolean {
+  matcher.lastIndex = 0;
+  return matcher.test(subject);
 }
 
 function sameMailbox(left: string, right: string): boolean {

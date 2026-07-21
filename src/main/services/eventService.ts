@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { EventSnapshotInput } from "../../shared/ipc.js";
 import type { EplusRawFormSchema, EventSnapshot } from "../../shared/types.js";
 import type { AppDatabase } from "../storage/database.js";
+import type { BrowserSessionEngine } from "../engines/browserSessionEngine.js";
 import { parseEplusPage } from "./eplusPageParser.js";
 
 function canonicalizeUrl(input: string): string {
@@ -49,6 +50,24 @@ export class EventService {
       applicationDeadline: parsed.applicationDeadline,
       pageFingerprint: parsed.pageFingerprint,
       rawFormSchemaJson: JSON.stringify(parsed.rawFormSchema, null, 2)
+    };
+  }
+
+  async discoverFromLiveBrowser(engine: BrowserSessionEngine, sourceUrl: string): Promise<EventSnapshot> {
+    const canonicalSource = canonicalizeUrl(sourceUrl);
+    await engine.navigate(canonicalSource);
+    const parsed = parseEplusPage(engine.getCurrentUrl(), await engine.getCurrentHtml());
+    return {
+      id: randomUUID(),
+      sourceUrl: parsed.sourceUrl,
+      canonicalUrl: canonicalizeUrl(parsed.canonicalUrl),
+      title: parsed.title,
+      ...(parsed.venue ? { venue: parsed.venue } : {}),
+      ...(parsed.scheduleText ? { scheduleText: parsed.scheduleText } : {}),
+      ...(parsed.applicationDeadline ? { applicationDeadline: parsed.applicationDeadline } : {}),
+      fetchedAt: new Date().toISOString(),
+      rawFormSchema: parsed.rawFormSchema,
+      pageFingerprint: parsed.pageFingerprint
     };
   }
 
