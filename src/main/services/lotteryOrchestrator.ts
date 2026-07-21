@@ -19,7 +19,8 @@ export class LotteryOrchestrator {
     private readonly adapter: SubmissionAdapter,
     private readonly network: NetworkService,
     private readonly db: AppDatabase,
-    private readonly mailAttribution: MailAttributionService
+    private readonly mailAttribution: MailAttributionService,
+    private readonly decryptSecret: (cipherText: string) => string
   ) {}
 
   createAuthorization(input: { taskId: string; runId: string; accountId: string; preference: LotteryPreference; reviewDigest: string; policy: "required" | "disabled"; acknowledgementVersion: number }): SubmissionAuthorization {
@@ -43,7 +44,7 @@ export class LotteryOrchestrator {
         const account = this.db.getStoredAccount(input.run.accountId);
         if (!account) throw new Error("Account not found.");
         // Password decryption stays outside the orchestrator boundary.
-        await this.adapter.login(account.eplusEmail, account.encryptedEplusPassword);
+        await this.adapter.login(account.eplusEmail, this.decryptSecret(account.encryptedEplusPassword));
         challenge = await this.adapter.detectChallenge();
       }
       if (challenge === "EmailCode") return this.pause(this.requireRun(input.run.id), "Verification code requires manual attribution.");

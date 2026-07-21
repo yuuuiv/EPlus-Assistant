@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Account, AccountInput, ImportReport } from "../../shared/types.js";
+import type { Account, AccountInput, ImportReport, PasswordRevealResponse } from "../../shared/types.js";
 import { SecretStore } from "../storage/secretStore.js";
 import type { AppDatabase } from "../storage/database.js";
 import { parseAccountImport } from "./importService.js";
@@ -52,5 +52,13 @@ export class AccountService {
   deleteAccount(id: string): void {
     this.db.deleteAccount(id);
   }
-}
 
+  revealPassword(id: string, senderWindowId: string): PasswordRevealResponse {
+    const account = this.db.getStoredAccount(id);
+    if (!account) throw new Error("Account not found.");
+    const session = this.secretStore.createRevealSession(id, account.encryptedEplusPassword, senderWindowId);
+    const result = this.secretStore.consumeRevealSession(session.requestId, senderWindowId);
+    if (!result) throw new Error("Failed to establish password reveal session.");
+    return { plaintext: result.plaintext, expiresAt: session.expiresAt };
+  }
+}

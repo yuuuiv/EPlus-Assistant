@@ -75,7 +75,7 @@ function adapterFixture(review: ReviewPageData) {
 function createOrchestrator(db: AppDatabase, adapter: ReturnType<typeof adapterFixture>): LotteryOrchestrator {
   const engine = { startNetworkSession: vi.fn(async () => true), reuseSession: vi.fn(async () => false), manualTakeover: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
   const network = new NetworkService({ rotate: vi.fn(async () => undefined), detectIp: vi.fn(async () => ({ ip: "1.1.1.1", country: "Japan", region: "Tokyo" })) }, { getSetting: () => undefined });
-  return new LotteryOrchestrator(engine, adapter, network, db, {});
+  return new LotteryOrchestrator(engine, adapter, network, db, {}, (cipher) => `decrypted-${cipher}`);
 }
 
 function digest(value: unknown): string { return createHash("sha256").update(stableJson(value)).digest("hex"); }

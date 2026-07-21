@@ -83,7 +83,7 @@ export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore:
   }, { getSetting: (key) => db.getSetting(key) });
   const browserEngine = new BrowserSessionEngine({ executablePath: process.env.EPLUS_BROWSER_EXECUTABLE ?? process.execPath, profilesDir: path.join(db.getDataDir(), "profiles"), navigationTimeoutMs: 30_000, retryLimit: 1, retryDelayMs: 500 }, { captureScreenshot: async () => ({}), captureHtmlSnapshot: async () => ({}) }, network);
   const browserAdapter = new EplusBrowserAdapter(browserEngine);
-  const queueService = new QueueService(new LotteryOrchestrator(browserEngine, browserAdapter, network, db, {}), db);
+  const queueService = new QueueService(new LotteryOrchestrator(browserEngine, browserAdapter, network, db, {}, (cipher) => secretStore.decryptString(cipher)), db);
   const profileHarvester = new ProfileHarvester(browserEngine, browserAdapter, db);
   const recordRefresh = new RecordRefreshService(browserEngine, browserAdapter, db);
 
@@ -91,7 +91,15 @@ export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore:
   registerHandler("account:add", window, addAccountSchema, (input) => accountService.addAccount(input));
   registerHandler("account:import", window, importAccountsSchema, (input) => accountService.importAccounts(input.kind, input.text));
   registerHandler("account:delete", window, idSchema, (id) => accountService.deleteAccount(id));
-  registerHandler("account:reveal-password", window, idSchema, (id) => accountService.revealPassword(id));
+  ipcMain.handle("account:reveal-password", async (event, payload: unknown) => {
+    validateSender(event, window);
+    try {
+      const id = idSchema.parse(payload);
+      return accountService.revealPassword(id, String(event.sender.id));
+    } catch (error) {
+      throw sanitizedError(error);
+    }
+  });
   registerHandler("profile:harvest", window, harvestSchema, (input) => profileHarvester.harvest(input));
   registerHandler("profile:refresh", window, idSchema, (id) => profileHarvester.refreshProfile(id));
   registerHandler("profile:refresh-application-records", window, idSchema, (id) => recordRefresh.refreshApplicationRecords(id));
