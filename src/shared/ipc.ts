@@ -69,10 +69,6 @@ export interface ElectronApi {
   saveEventSnapshot(input: EventSnapshotInput): Promise<EventSnapshot>;
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
   createTaskV2(input: CreateTaskInputV2): Promise<{ taskId: string }>;
-  /** Deprecated: the main process deliberately does not register this privileged mutation channel. */
-  updateTaskStatus(taskId: string, status: string): Promise<void>;
-  /** Deprecated: the main process deliberately does not register this privileged mutation channel. */
-  updateRunStatus(runId: string, status: string, note?: string): Promise<void>;
   enqueueTask(taskId: string): Promise<void>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
@@ -89,8 +85,8 @@ export interface ElectronApi {
   reconcileSubmission(input: { taskId: string; runId: string }): Promise<"Submitted" | "AlreadyApplied" | "Failed">;
   listProfiles(accountId: string): Promise<AccountProfile | undefined>;
   listCompanions(accountId: string): Promise<Companion[]>;
-  listApplicationRecords(accountId: string, filter?: Record<string, unknown>): Promise<ApplicationRecord[]>;
-  listLotteryResults(accountId: string, filter?: Record<string, unknown>): Promise<LotteryResultRecord[]>;
+  listApplicationRecords(accountId: string): Promise<ApplicationRecord[]>;
+  listLotteryResults(accountId: string): Promise<LotteryResultRecord[]>;
   saveVerificationMailbox(input: VerificationMailboxUpdate): Promise<VerificationMailboxSettings>;
   testVerificationMailbox(): Promise<ValidationResult>;
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
@@ -98,7 +94,6 @@ export interface ElectronApi {
   saveNetworkSettings(input: NetworkSettingsUpdate): Promise<NetworkSettings>;
   detectIp(): Promise<IpIdentity>;
   rotateIp(): Promise<void>;
-  addLog(message: string, level?: "info" | "warn" | "error", metadata?: Record<string, unknown>): Promise<void>;
   openDataFolder(): Promise<void>;
 }
 

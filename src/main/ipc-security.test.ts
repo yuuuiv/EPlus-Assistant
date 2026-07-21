@@ -21,24 +21,35 @@ describe("IPC Security", () => {
     const enqueue = requireHandler("queue:enqueue-task");
     const pause = requireHandler("queue:pause");
 
-    await expect(enqueue({ sender: {} }, fixture.taskId)).rejects.toThrow("application window");
-    await expect(enqueue({ sender: fixture.webContents }, "")).rejects.toThrow();
-    await expect(pause({ sender: {} })).rejects.toThrow("application window");
+    await expect(enqueue({ sender: {} }, fixture.taskId)).rejects.toThrow("Unauthorized IPC sender");
+    await expect(enqueue(rendererEvent(fixture.webContents), "")).rejects.toThrow("Invalid IPC payload");
+    await expect(pause({ sender: {} })).rejects.toThrow("Unauthorized IPC sender");
   });
 
   it("manual actions validate runId, action, sender, and stale run ownership", async () => {
     const fixture = await createFixture();
     const manualAction = requireHandler("run:manual-action");
 
-    await expect(manualAction({ sender: {} }, { runId: fixture.runId, action: "continue" })).rejects.toThrow("application window");
-    await expect(manualAction({ sender: fixture.webContents }, { runId: fixture.runId, action: "forged" })).rejects.toThrow();
-    await expect(manualAction({ sender: fixture.webContents }, { runId: fixture.runId, action: "continue" })).rejects.toThrow("manual checkpoint");
+    await expect(manualAction({ sender: {} }, { runId: fixture.runId, action: "continue" })).rejects.toThrow("Unauthorized IPC sender");
+    await expect(manualAction(rendererEvent(fixture.webContents), { runId: fixture.runId, action: "forged" })).rejects.toThrow("Invalid IPC payload");
+    await expect(manualAction(rendererEvent(fixture.webContents), { runId: fixture.runId, action: "continue" })).rejects.toThrow("manual checkpoint");
   });
 
   it("does not register renderer-controlled status mutation channels", async () => {
     await createFixture();
     expect(handlers.has("task:update-status")).toBe(false);
     expect(handlers.has("run:update-status")).toBe(false);
+  });
+
+  it("rejects an unexpected sender before every registered handler parses its payload", async () => {
+    await createFixture();
+
+    const results = await Promise.allSettled([...handlers.values()].map((handler) => Promise.resolve(handler({ sender: {} }))));
+    expect(results).toHaveLength(handlers.size);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect(result.reason).toMatchObject({ message: "Unauthorized IPC sender." });
+    }
   });
 });
 
@@ -48,7 +59,7 @@ function requireHandler(channel: string): (...args: unknown[]) => Promise<unknow
   return async (...args) => handler(...args);
 }
 
-async function createFixture(): Promise<{ taskId: string; runId: string; webContents: object }> {
+async function createFixture(): Promise<{ taskId: string; runId: string; webContents: { once: ReturnType<typeof vi.fn>; getURL: () => string } }> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "eplus-ipc-security-"));
   directories.push(directory);
   const db = new AppDatabase(directory);
@@ -58,7 +69,11 @@ async function createFixture(): Promise<{ taskId: string; runId: string; webCont
   db.createTask({ id: "task", eventSnapshotId: "event", preference: { entries: [], paymentMethodId: "store", consentFlags: {} }, accountIds: [account.id], status: "AwaitingConfirmation", confirmationDigest: "digest", createdAt: "2026-07-21T00:00:00.000Z", updatedAt: "2026-07-21T00:00:00.000Z" });
   const run = db.listRunsForTask("task")[0];
   if (!run) throw new Error("Expected fixture run.");
-  const webContents = { once: vi.fn() };
+  const webContents = { once: vi.fn(), getURL: () => "file:///app/index.html" };
   registerIpc({ webContents } as never, db, { encryptString: vi.fn((value: string) => value), decryptString: vi.fn((value: string) => value), encryptJson: vi.fn(), decryptJson: vi.fn() } as never);
   return { taskId: "task", runId: run.id, webContents };
+}
+
+function rendererEvent(webContents: { getURL: () => string }): { sender: typeof webContents; senderFrame: { url: string } } {
+  return { sender: webContents, senderFrame: { url: webContents.getURL() } };
 }
