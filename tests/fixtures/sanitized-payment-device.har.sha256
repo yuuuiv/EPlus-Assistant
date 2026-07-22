@@ -1,0 +1,5 @@
+{
+  "algorithm": "sha256",
+  "fixture": "tests/fixtures/sanitized-payment-device.har",
+  "sha256": "f3a3350a5c739dbee20c31facc029d110f8d93816cfc176f2e13bca5366014c6"
+}

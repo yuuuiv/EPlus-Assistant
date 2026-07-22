@@ -15,6 +15,8 @@ export interface ClashConfig {
   readonly port: number;
   readonly secret: string;
   readonly proxyGroup: string;
+  /** When set, rotation only cycles among these node names within proxyGroup, instead of every node Clash reports for it. */
+  readonly selectedNodes?: readonly string[];
 }
 
 export interface BrowserProxy {
@@ -26,8 +28,8 @@ type NodeInfo = NetworkNode;
 export interface NetworkRotationProvider {
   detectIp(): Promise<IpInfo>;
   rotate(): Promise<void>;
-  getBrowserProxy?(): Promise<BrowserProxy>;
-  listNodes?(): Promise<readonly NodeInfo[]>;
+  getBrowserProxy?(): Promise<BrowserProxy | undefined>;
+  listNodes?(groupName?: string): Promise<readonly NodeInfo[]>;
   selectNode?(name: string): Promise<void>;
 }
 
@@ -77,12 +79,15 @@ export class ClashControllerProvider implements NetworkRotationProvider {
 
   async rotate(): Promise<void> {
     const group = await this.fetchGroup();
-    const nodes = readStringArray(group, "all");
+    const allNodes = readStringArray(group, "all");
+    if (allNodes.length === 0) throw new Error("Clash proxy group has no active nodes");
+    // Restrict rotation candidates to the user's hand-picked subset, if configured; fall back to
+    // the full group when the restriction leaves nothing usable (e.g. a stale saved selection).
+    const restricted = this.config.selectedNodes?.filter((name) => allNodes.includes(name));
+    const nodes = restricted && restricted.length > 0 ? restricted : allNodes;
     const current = readString(group, "now");
-    if (nodes.length === 0 || !current) throw new Error("Clash proxy group has no active nodes");
-    const currentIndex = nodes.indexOf(current);
-    if (currentIndex < 0) throw new Error("Clash proxy group current node is unavailable");
-    const target = nodes[(currentIndex + 1) % nodes.length];
+    const currentIndex = current ? nodes.indexOf(current) : -1;
+    const target = currentIndex >= 0 ? nodes[(currentIndex + 1) % nodes.length] : nodes[0];
     if (!target) throw new Error("Clash proxy group has no rotation target");
     const response = await this.fetcher(this.groupUrl(), {
       method: "PUT",
@@ -93,8 +98,9 @@ export class ClashControllerProvider implements NetworkRotationProvider {
     if (!response.ok) throw new Error(`Clash rotation failed: HTTP ${response.status}`);
   }
 
-  async listNodes(): Promise<readonly NodeInfo[]> {
-    const group = await this.fetchGroup();
+  /** groupName lets the caller inspect any known proxy group's members, not only the one currently configured as active. */
+  async listNodes(groupName?: string): Promise<readonly NodeInfo[]> {
+    const group = await this.fetchGroup(groupName);
     const delays = new Map<string, number>();
     const history = readArray(group, "history");
     for (const entry of history) {
@@ -122,16 +128,16 @@ export class ClashControllerProvider implements NetworkRotationProvider {
     if (!response.ok) throw new Error(`Clash node selection failed: HTTP ${response.status}`);
   }
 
-  private async fetchGroup(): Promise<Record<string, unknown>> {
-    const response = await this.fetcher(this.groupUrl(), { headers: this.headers(), signal: AbortSignal.timeout(5_000) });
+  private async fetchGroup(groupName?: string): Promise<Record<string, unknown>> {
+    const response = await this.fetcher(this.groupUrl(groupName), { headers: this.headers(), signal: AbortSignal.timeout(5_000) });
     if (!response.ok) throw new Error(`Clash proxy query failed: HTTP ${response.status}`);
     const data = await response.json();
     if (!isRecord(data)) throw new Error("Clash proxy response is invalid");
     return data;
   }
 
-  private groupUrl(): string {
-    return `http://${this.config.host}:${this.config.port}/proxies/${encodeURIComponent(this.config.proxyGroup)}`;
+  private groupUrl(groupName?: string): string {
+    return `http://${this.config.host}:${this.config.port}/proxies/${encodeURIComponent(groupName ?? this.config.proxyGroup)}`;
   }
 
   private configUrl(): string {
@@ -140,6 +146,26 @@ export class ClashControllerProvider implements NetworkRotationProvider {
 
   private headers(): Record<string, string> {
     return { Authorization: `Bearer ${this.config.secret}` };
+  }
+}
+
+/**
+ * For a machine whose real network is already in the required region (no Clash/sing-box
+ * proxy needed). There is no proxy layer to rotate or route the browser through - the lease
+ * is issued purely from the machine's own direct outbound IP.
+ */
+export class DirectNetworkRotationProvider implements NetworkRotationProvider {
+  constructor(private readonly fetcher: Fetcher = fetch) {}
+
+  async detectIp(): Promise<IpInfo> {
+    const url = "http://ip-api.com/json/?fields=query,country,regionName,city";
+    const response = await this.fetcher(url, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`IP detection failed: HTTP ${response.status}`);
+    return parseIpInfo(await response.json());
+  }
+
+  async rotate(): Promise<void> {
+    // No proxy layer to rotate; acquireLease still re-validates via detectIp() afterward.
   }
 }
 

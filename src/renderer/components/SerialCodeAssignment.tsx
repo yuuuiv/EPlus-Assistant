@@ -1,6 +1,6 @@
 import { ArrowRight, ClipboardList, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { Account, SerialCodePlan } from "../../shared/types.js";
+import type { Account, AvailableDayOption, SerialCodePlan } from "../../shared/types.js";
 
 interface ApplicationChoice {
   readonly id: string;
@@ -13,16 +13,18 @@ interface SerialCodeAssignmentProps {
   readonly plans: Record<string, SerialCodePlan[]>;
   readonly batchText: string;
   readonly applicationChoices: readonly ApplicationChoice[];
-  readonly availableDays: readonly ("day1" | "day2")[];
+  readonly availableDays: readonly AvailableDayOption[];
   readonly defaultApplicationLinkId?: string;
   readonly onBatchTextChange: (value: string) => void;
   readonly onPlansChange: (plans: Record<string, SerialCodePlan[]>) => void;
 }
 
-const dayOptions = [
-  { value: "day1" as const, label: "第一天" },
-  { value: "day2" as const, label: "第二天" }
-];
+const fallbackDayLabels: Record<"day1" | "day2", string> = { day1: "Day 1", day2: "Day 2" };
+
+/** Prefers the site's own label (e.g. "<DAY1>シリアル先行") over a generic translation. */
+function dayLabel(day: "day1" | "day2", availableDays: readonly AvailableDayOption[]): string {
+  return availableDays.find((option) => option.day === day)?.label ?? fallbackDayLabels[day];
+}
 
 function parseCodes(value: string): string[] {
   return Array.from(new Set(value.split(/[\s,，;；]+/u).map((code) => code.trim()).filter(Boolean)));
@@ -36,7 +38,7 @@ export function SerialCodeAssignment(props: SerialCodeAssignmentProps) {
   const [parsedCodes, setParsedCodes] = useState<string[]>(() => parseCodes(props.batchText));
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
   const [accountId, setAccountId] = useState(props.selectedAccountIds[0] ?? "");
-  const [days, setDays] = useState<Array<"day1" | "day2">>(() => props.availableDays.length > 0 ? [...props.availableDays] : ["day1", "day2"]);
+  const [days, setDays] = useState<Array<"day1" | "day2">>(() => props.availableDays.length > 0 ? props.availableDays.map((option) => option.day) : ["day1", "day2"]);
   const [applicationLinkId, setApplicationLinkId] = useState(props.defaultApplicationLinkId ?? "");
   useEffect(() => {
     if (!props.selectedAccountIds.includes(accountId)) setAccountId(props.selectedAccountIds[0] ?? "");
@@ -101,8 +103,8 @@ export function SerialCodeAssignment(props: SerialCodeAssignmentProps) {
         </label>
         <fieldset>
           <legend>本次场次方案</legend>
-          <div className="check-row">
-            {dayOptions.filter((day) => props.availableDays.length === 0 || props.availableDays.includes(day.value)).map((day) => <label key={day.value}><input type="checkbox" checked={days.includes(day.value)} onChange={() => setDays((current) => current.includes(day.value) ? current.filter((item) => item !== day.value) : [...current, day.value])} />{day.label}</label>)}
+          <div className="check-row-group">
+            {(["day1", "day2"] as const).filter((day) => props.availableDays.length === 0 || props.availableDays.some((option) => option.day === day)).map((day) => <label key={day} className="check-row"><input type="checkbox" checked={days.includes(day)} onChange={() => setDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])} />{dayLabel(day, props.availableDays)}</label>)}
           </div>
         </fieldset>
         {props.applicationChoices.length > 0 ? <label>申请入口
@@ -122,7 +124,7 @@ export function SerialCodeAssignment(props: SerialCodeAssignmentProps) {
         <button type="button" className="icon-button danger" disabled={assignedCodes.size === 0} onClick={clear}><Trash2 size={15} />清空分配</button>
       </div>
       <div className="serial-plan-list">
-        {selectedAccounts.map((account) => { const plans = props.plans[account.id] ?? []; const runCount = plans.reduce((total, plan) => total + Math.max(plan.daySelection?.length ?? 1, 1), 0); return <article key={account.id} className="serial-plan-card"><div><strong>{accountLabel(account)}</strong><span>{plans.length} 个码 · {runCount} 次浏览器运行</span></div><div className="serial-plan-items">{plans.map((plan) => <span key={plan.code} className="serial-plan-item"><code>{plan.code}</code><small>{plan.daySelection?.length === 2 ? "两天 → 2 次" : plan.daySelection?.[0] === "day2" ? "第二天" : "第一天"}</small><button type="button" className="icon-button" aria-label={`移除 ${plan.code}`} onClick={() => remove(account.id, plan.code)}><Trash2 size={13} /></button></span>)}{plans.length === 0 ? <span className="muted">未分配</span> : null}</div></article>; })}
+        {selectedAccounts.map((account) => { const plans = props.plans[account.id] ?? []; const runCount = plans.reduce((total, plan) => total + Math.max(plan.daySelection?.length ?? 1, 1), 0); return <article key={account.id} className="serial-plan-card"><div><strong>{accountLabel(account)}</strong><span>{plans.length} 个码 · {runCount} 次浏览器运行</span></div><div className="serial-plan-items">{plans.map((plan) => <span key={plan.code} className="serial-plan-item"><code>{plan.code}</code><small>{plan.daySelection?.length === 2 ? "两天 → 2 次" : plan.daySelection?.[0] ? dayLabel(plan.daySelection[0], props.availableDays) : ""}</small><button type="button" className="icon-button" aria-label={`移除 ${plan.code}`} onClick={() => remove(account.id, plan.code)}><Trash2 size={13} /></button></span>)}{plans.length === 0 ? <span className="muted">未分配</span> : null}</div></article>; })}
       </div>
     </section>
   );

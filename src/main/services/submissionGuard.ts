@@ -5,8 +5,9 @@ import { assertPaymentStateForRun } from "../../core/stateMachine.js";
 import type { DeviceProfileKey, DispatchLease, PaymentDiscoveryCheckpoint, PaymentSelection, PaymentSelectionInput, RecoveryFence, SubmissionAuthorization } from "../../shared/types.js";
 import { PaymentValidationError } from "../../shared/types.js";
 import type { AppDatabase } from "../storage/database.js";
+import { DEVICE_PROFILE_KEYS } from "../engines/deviceProfiles.js";
 
-export const DEVICE_PROFILE_KEYS = ["desktop-chrome", "iphone-13", "pixel-7"] as const satisfies readonly DeviceProfileKey[];
+export { DEVICE_PROFILE_KEYS } from "../engines/deviceProfiles.js";
 
 export function validateDeviceProfileKey(value: string | undefined): DeviceProfileKey {
   if (value === undefined) return "desktop-chrome";

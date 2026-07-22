@@ -4,6 +4,9 @@ import { makeConfirmationDigest } from "../../core/digest.js";
 import { assertRunTransition, assertTaskTransition } from "../../core/stateMachine.js";
 import { PaymentValidationError } from "../../shared/types.js";
 import type { AppDatabase } from "../storage/database.js";
+import { isDeviceProfileKey } from "../engines/deviceProfiles.js";
+
+export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = ["Completed", "Failed", "Cancelled"];
 
 export class TaskService {
   constructor(private readonly db: AppDatabase) {}
@@ -14,6 +17,13 @@ export class TaskService {
 
   listRuns(): AccountRun[] {
     return this.db.listRuns();
+  }
+
+  deleteTask(taskId: string): void {
+    const task = this.db.listTasks().find((item) => item.id === taskId);
+    if (!task) throw new Error("Task not found.");
+    if (!TERMINAL_TASK_STATUSES.includes(task.status)) throw new Error("只能删除已完成、失败或已取消的任务。");
+    this.db.deleteTask(taskId);
   }
 
   createTask(input: CreateTaskInput & { canonicalUrl: string; confirmationPolicy?: "required" | "disabled"; automationRiskAcknowledgement?: AutomationRiskAcknowledgement }): { taskId: string } {
@@ -134,6 +144,7 @@ export function validateTaskInput(input: CreateTaskInput, event: EventSnapshot):
     if (input.accountIds.some((accountId) => !(commonCode || allocations[accountId]?.some((plan) => plan.code?.trim()) || codes[accountId]?.trim()))) errors.push("A serial code is required for every selected account.");
   }
   const availableDays = event.rawFormSchema.serialCode.availableDays ?? [];
+  const isAvailableDay = (day: "day1" | "day2") => availableDays.some((option) => option.day === day);
   if (event.rawFormSchema.serialCode.daySelectionRequired && availableDays.length > 1) {
     const selections = input.preference.daySelectionByAccountId ?? {};
     const allocations = input.preference.serialCodeAllocations ?? {};
@@ -141,13 +152,22 @@ export function validateTaskInput(input: CreateTaskInput, event: EventSnapshot):
       const selected = selections[accountId];
       const plans = allocations[accountId];
       if (plans?.length) {
-        for (const plan of plans) if (!plan.daySelection?.length || plan.daySelection.some((day) => !availableDays.includes(day))) errors.push(`A supported day selection is required for serial code ${plan.code} on account ${accountId}.`);
-      } else if (!selected?.length || selected.some((day) => !availableDays.includes(day))) errors.push(`A supported day selection is required for account ${accountId}.`);
+        for (const plan of plans) if (!plan.daySelection?.length || plan.daySelection.some((day) => !isAvailableDay(day))) errors.push(`A supported day selection is required for serial code ${plan.code} on account ${accountId}.`);
+      } else if (!selected?.length || selected.some((day) => !isAvailableDay(day))) errors.push(`A supported day selection is required for account ${accountId}.`);
     }
   }
+  // A serial-code-only entry page (e.g. https://eplus.jp/serial/mygo_3rdAL) has no
+  // "ticket" option group at all — the page itself is the application entry and the
+  // actual entry mechanism is the serial code input, not a ticket-type identifier.
+  const hasTicketOption = event.rawFormSchema.options.some((option) => option.kind === "ticket");
   for (const entry of input.preference.entries) {
+    if (!Number.isInteger(entry.quantity) || entry.quantity < 1) {
+      errors.push("Ticket preferences contain an invalid entry.");
+      continue;
+    }
+    if (!hasTicketOption) continue;
     const ticketOption = event.rawFormSchema.options.find((option) => option.kind === "ticket" && option.values.some((value) => value.id === entry.ticketTypeId));
-    if (!entry.ticketTypeId || !Number.isInteger(entry.quantity) || entry.quantity < 1 || (ticketOption === undefined && event.rawFormSchema.options.some((option) => option.kind === "ticket"))) errors.push("Ticket preferences contain an invalid entry.");
+    if (!entry.ticketTypeId || ticketOption === undefined) errors.push("Ticket preferences contain an invalid entry.");
   }
   const paymentOption = event.rawFormSchema.options.find((option) => option.kind === "payment");
   const paymentValues = new Map(paymentOption?.values.map((value) => [value.id, value]) ?? []);
@@ -178,6 +198,7 @@ function isSensitivePaymentCredential(value: string): boolean {
 }
 
 export function validateDeviceProfileKey(value: DeviceProfileKey | undefined): DeviceProfileKey {
-  if (value === undefined || value === "desktop-chrome" || value === "iphone-13" || value === "pixel-7") return value ?? "desktop-chrome";
+  if (value === undefined) return "desktop-chrome";
+  if (isDeviceProfileKey(value)) return value;
   throw new PaymentValidationError("InvalidDeviceProfile", "Device profile is not approved.");
 }

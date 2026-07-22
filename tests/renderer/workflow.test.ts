@@ -21,7 +21,7 @@ const directories: string[] = [];
 const accountInput: AccountInput = { eplusEmail: "review@example.com", password: "secret", label: "Review account" };
 const event: EventSnapshot = {
   id: "event-1", sourceUrl: "https://eplus.jp/source", canonicalUrl: "https://eplus.jp/event", title: "Review event", fetchedAt: "2026-07-21T00:00:00.000Z", pageFingerprint: "fingerprint",
-  rawFormSchema: { sourceKind: "serial-code", options: [{ id: "ticket", label: "Ticket", kind: "ticket", required: true, values: [{ id: "ticket-a", label: "A" }] }, { id: "payment", label: "Payment", kind: "payment", required: true, values: [{ id: "payment-a", label: "Store" }] }], applicationLinks: [], serialCode: { required: true, label: "Code", errorSelectors: [], knownErrorMessages: [], availableDays: ["day1", "day2"], daySelectionRequired: true }, selectorHints: {}, requiresManualInspection: false, notes: [] }
+  rawFormSchema: { sourceKind: "serial-code", options: [{ id: "ticket", label: "Ticket", kind: "ticket", required: true, values: [{ id: "ticket-a", label: "A" }] }, { id: "payment", label: "Payment", kind: "payment", required: true, values: [{ id: "payment-a", label: "Store" }] }], applicationLinks: [], serialCode: { required: true, label: "Code", errorSelectors: [], knownErrorMessages: [], availableDays: [{ day: "day1", label: "Day1" }, { day: "day2", label: "Day2" }], daySelectionRequired: true }, selectorHints: {}, requiresManualInspection: false, notes: [] }
 };
 
 async function fixture() {
@@ -115,7 +115,7 @@ describe("Todo 7 Payment discovery, device profile, and resume workflow", () => 
     const fx = await createWorkflowFixture("pixel-7");
     expect(fx.task.deviceProfileKey).toBe("pixel-7");
     expect(deviceProfileLabel(fx.task.deviceProfileKey)).toBe("Pixel 7");
-    expect(DEVICE_PROFILE_OPTIONS.map((option) => option.key)).toEqual(["desktop-chrome", "iphone-13", "pixel-7"]);
+    expect(DEVICE_PROFILE_OPTIONS.map((option) => option.key)).toEqual(["desktop-chrome", "desktop-edge", "iphone-13", "iphone-15", "iphone-se", "pixel-7", "pixel-8", "galaxy-s24", "ipad-gen7"]);
   });
 
   it("rejects a payment selection whose checkpoint fingerprint is stale", async () => {
@@ -248,7 +248,7 @@ function workflowOrchestrator(db: AppDatabase, adapter: ReturnType<typeof paymen
 }
 
 function createTaskServiceOnly() {
-  const event: EventSnapshot = { id: "event", sourceUrl: "https://eplus.jp/source", canonicalUrl: "https://eplus.jp/event", title: "Event", fetchedAt: "2026-07-21T00:00:00.000Z", pageFingerprint: "fp", rawFormSchema: { sourceKind: "serial-code", options: [], applicationLinks: [], serialCode: { required: true, label: "Code", errorSelectors: [], knownErrorMessages: [], availableDays: ["day1", "day2"], daySelectionRequired: true }, selectorHints: {}, requiresManualInspection: false, notes: [] } };
+  const event: EventSnapshot = { id: "event", sourceUrl: "https://eplus.jp/source", canonicalUrl: "https://eplus.jp/event", title: "Event", fetchedAt: "2026-07-21T00:00:00.000Z", pageFingerprint: "fp", rawFormSchema: { sourceKind: "serial-code", options: [], applicationLinks: [], serialCode: { required: true, label: "Code", errorSelectors: [], knownErrorMessages: [], availableDays: [{ day: "day1", label: "Day1" }, { day: "day2", label: "Day2" }], daySelectionRequired: true }, selectorHints: {}, requiresManualInspection: false, notes: [] } };
   const database = { listAccounts: () => [{ id: "account" }] } as unknown as AppDatabase;
   return { tasks: new TaskService(database), event, account: { id: "account" } };
 }

@@ -1,6 +1,6 @@
 # Eplus Lottery Assistant
 
-<p align="center"><b><a href="README.md">English</a> | <a href="README_ZH.md">简体中文</a></b></p>
+<p align="center"><b><a href="README.md">English</a> | <a href="README_zh.md">简体中文</a></b></p>
 
 A local-first Windows Electron workbench for managing Eplus lottery accounts, event snapshots, tasks, run status, and audit information. The React renderer communicates with the main process exclusively through restricted IPC. Account passwords, mailbox reading credentials, and network controller keys are stored only in local encrypted storage.
 
@@ -22,6 +22,8 @@ npm run dev
 ```
 
 `npm run dev` builds the Electron main process, starts Vite on `127.0.0.1:5173`, waits for it, clears `ELECTRON_RUN_AS_NODE`, and opens Electron.
+
+Vite only hot-reloads the renderer. Any change under `src/main/` (IPC handlers, services, engines) needs a full stop and restart of `npm run dev` before it takes effect — otherwise the running Electron process keeps validating against the old compiled code, which can look like an IPC or settings bug that was already fixed.
 
 Build and run the local production bundle:
 
@@ -51,7 +53,7 @@ The template supports these values:
 | `EPLUS_CERISE_BOUQUET_ADMIN_AUTH` | Optional main-process/admin bridge credential for deployments using `x-admin-auth`. |
 | `EPLUS_CERISE_BOUQUET_ENDPOINT` | Optional cerise mailbox API endpoint; defaults to `https://temp-mail.lianminglai.workers.dev`. Use the Worker API, not a frontend-only `mail.cerise-bouquet.xyz` URL. |
 | `EPLUS_BROWSER_EXECUTABLE` | Optional local Chrome executable path. |
-| `EPLUS_DEVICE_PROFILE` | `desktop-chrome`, `iphone-13`, or `pixel-7`. |
+| `EPLUS_DEVICE_PROFILE` | One of the approved device profiles — see **Create and queue a task**. |
 | `EPLUS_ALLOW_FINAL_SUBMIT` | Kept `false`; it does not override the command-line confirmation gate. |
 | `EPLUS_TEST_DATA_DIR` | Optional isolated test-data location. |
 
@@ -94,6 +96,8 @@ Use placeholders in examples and test data. The UI never needs a raw HAR, browse
 
 Static parsing is a planning aid. Login-gated forms, delayed controls, closed reception pages, serial-code ambiguity, phone verification, and unknown page structures require human inspection rather than inference.
 
+The **Events** page also lists every saved snapshot with its parsed page type and fetch time. Delete a snapshot once it's stale or was parsed incorrectly, then re-parse the source URL to replace it — deletion is blocked while a non-terminal task still references that snapshot.
+
 ## Configure verification mailbox access
 
 Open **Mailbox** and choose one of the supported modes:
@@ -109,57 +113,83 @@ When exactly one matching candidate is found, **Read verification code** can ret
 
 ## Manual browser takeover, IP rotation, and account profiles
 
-Login is automated in the main process with the stored account credentials. If Eplus requests an email code, the main process reads and fills it using the current login trigger time and the account's forwarding source. Only CAPTCHA, device verification, sensitive card fields, or unknown controls require takeover; the visible Chrome/Edge window is kept open for those cases and snapshots are saved before resuming.
+Login is automated in the main process with the stored account credentials. If Eplus requests an email code, the main process reads and fills it using the current login trigger time and the account's forwarding source. Interstitial notices ("必ずお読みください" / "同意して申込み") use verified, deterministic selectors, so the app clicks through them automatically too.
+
+Only CAPTCHA, device verification, sensitive card fields, or a genuinely unrecognized page require a human in the actual browser; the visible Chrome/Edge window is kept open for those cases and a snapshot is saved before resuming. Terms/consent checkbox gates get a best-effort version of the runtime-discovery behavior described below, and fall back to a real manual takeover whenever the match isn't confident.
+
+The task monitor now distinguishes *why* a run is waiting:
+
+- **Network lease requires manual takeover**: the proxy (or, in direct mode, the machine's own network) couldn't be verified against the required country, so no browser was opened at all — opening one on an unverified network would risk exposing the account's real IP. The card links straight to the **Network** panel and offers a retry once you've fixed the configuration.
+- **Browser challenge**: a real browser window is already open and waiting on CAPTCHA, device verification, or an unknown page.
 
 After submission, a run is not marked complete merely because the page navigated. It becomes `Submitted` only after a new message from the current account's forwarding source has been received, the original sender is exactly `info@eplus.co.jp`, and the message contains the `申込み完了・抽選結果確認期間のご案内` template plus the application-history link/text. Otherwise it remains `AwaitingCompletionEmail` and cannot be submitted again.
 
-The **Network** panel supports Clash Verge/Clash and sing-box Clash API controllers. Paste a YAML or JSON controller configuration to import `external-controller`, `secret`, and the proxy group/selector, then review and save it. The main process also reads Clash `/configs` for `mixed-port`/`port` and explicitly launches the browser through that proxy, so changing a controller node changes the browser exit as well. **Detect IP** shows IP/country/region; **Rotate IP** changes the controller group. Each lottery run rotates, detects through the same proxy, and validates its network lease before opening the account session.
+The **Network** panel supports three controller modes:
 
-After a completed run, the main process automatically refreshes the account profile. It reads the member pages for phone, name, gender, birthday, address, current/history companions, the application history at `https://eplus.jp/jyoukyou`, and lottery states. The Account detail view can refresh the profile manually and filter application/results tables. Credit cards are restricted to brand/last four digits; PAN, CVV and expiry are never persisted.
+- **Clash Verge / Clash** and **sing-box Clash API**: the **Groups and nodes** section is where you actually work day to day — pick the active proxy group from **Current group**, select **Read nodes** to pull that group's real members straight from the running controller, then check exactly which nodes should be part of your rotation subset. Each group keeps its own saved subset, so switching **Current group** later restores whatever you picked for that group instead of resetting the checklist. Nothing is pre-checked: an empty selection means "no restriction, rotate every node in the group," so you only need to check boxes for the nodes you actually want to narrow down to. The collapsible **Import proxy configuration** control underneath is only for bootstrapping — paste a YAML or JSON controller export once to fill in `external-controller`, `secret`, and the list of known group names, then use **Groups and nodes** for everything after that. The main process also reads Clash `/configs` for `mixed-port`/`port` and explicitly launches the browser through that proxy, so changing which nodes are selected changes the browser's exit as well.
+- **Direct**: for a machine whose real network is already in the required region, with no proxy at all. Every account can safely share that one real IP — the cross-account identity-reuse safeguard only applies to proxy rotation, where it catches rotation silently failing to actually change the exit IP.
+
+**Detect IP** shows IP/country/region; **Rotate IP** (Clash/sing-box modes only) changes the controller group. Each lottery run rotates (a no-op in direct mode), detects through the same path, and validates its network lease before opening the account session.
+
+After a completed run, the main process automatically refreshes the account profile. It reads the member pages for phone, name, gender, birthday, address, current/history companions, the application history at `https://eplus.jp/jyoukyou`, and lottery states. The Account detail view can refresh the profile manually and filter application/results tables; a failed or partial refresh now shows the actual reason (a network lease problem, a login/CAPTCHA challenge, or a specific missing field) instead of a bare status code. Credit cards are restricted to brand/last four digits; PAN, CVV and expiry are never persisted.
 
 The complete local IPC contract is documented in [docs/api.md](docs/api.md).
 
 ## Create and queue a task
 
-1. Open **Create task** and choose a saved event snapshot.
-2. Select an application entry, ticket quantity, and participating accounts.
-3. Optionally select a semantic payment preference. Leaving it empty means runtime discovery will present candidates later. Do not type an assumed DOM payment ID.
-4. Select one approved device profile:
+The **Create task** page is organized into sections that match the order you fill them in:
+
+1. **演出与申请入口 (Event and application entry)**: choose a saved event snapshot, the application entry, and ticket quantity.
+2. **设备与提交策略 (Device and submission policy)**: pick one approved device profile, then the confirmation policy and the automation-risk acknowledgement.
    - `desktop-chrome`: desktop profile, 1920x1080 screen.
+   - `desktop-edge`: desktop profile, 1920x1080 screen.
    - `iphone-13`: mobile profile, 390x844 viewport.
+   - `iphone-15`: mobile profile, 393x852 viewport.
+   - `iphone-se`: mobile profile, 375x667 viewport.
    - `pixel-7`: mobile profile, 412x915 viewport.
-5. For serial-code events, use the batch serial-code assignment window: paste one code per line, parse it, choose an account, entry, and Day1/Day2 (single or multiple), then select **分配所选抽选码**. **按账号平均生成方案** is also available.
-6. A code assigned to Day1 creates one browser run. A code assigned to Day1+Day2 expands into two independent runs, opening separate browser sessions and selecting one day in each; the entry and code may be identical, but the two days are never submitted from one browser window.
-7. Review the per-account code/run preview, acknowledge the automation-risk disclosure, and select **Create task**.
-8. Open **Task monitor** and select **Queue task** when the task is ready.
+   - `pixel-8`: mobile profile, 412x915 viewport.
+   - `galaxy-s24`: mobile profile, 384x832 viewport.
+   - `ipad-gen7`: tablet profile, 810x1080 viewport.
+3. **付款偏好 (Payment preference, optional)**: optionally select a semantic payment preference. Leaving it empty means runtime discovery presents candidates later — see **Select runtime-discovered candidates** below for what happens on repeat runs. Do not type an assumed DOM payment ID.
+4. **抽选码分配 (Serial-code allocation, when the event requires one)**: paste one code per line in the batch window, parse it, then assign each code to an account, application entry, and day (single or multiple) with **分配所选抽选码**, or spread the batch evenly with **按账号平均生成方案**. There's no shared/public code field — every code has its own usage-count limit on Eplus's side, so each one must be assigned to exactly one account.
+5. **参与账号 (Participating accounts)**: pick the accounts for this task.
+6. **预览与确认 (Preview and confirm)**: review the per-account code/run preview, acknowledge the automation-risk disclosure, and select **创建任务 (Create task)**.
+
+A code assigned to one day creates one browser run. A code assigned to two days expands into two independent runs, opening separate browser sessions and selecting one day in each; the entry and code may be identical, but the two days are never submitted from one browser window. Day/entry labels shown throughout (assignment, per-account preview) prefer the event's own parsed text (for example `<DAY1>シリアル先行`) and fall back to a plain "Day 1"/"Day 2" only when the event doesn't expose its own label.
+
+Open **Task monitor** and select **Queue task** when the task is ready.
 
 The selected device profile is allowlisted from the installed `playwright-core` registry and is immutable for each run. The browser profile directory is isolated by account and device profile; concurrent ownership of the same profile is rejected.
 
 The batch allocation IPC shape and legacy-field compatibility rules are documented in the **Serial-code task contract** section of [docs/api.md](docs/api.md). New tasks prefer `preference.serialCodeAllocations[accountId]`, where each item contains `code`, optional `daySelection`, optional `applicationLinkId`, and optional per-code ticket entries.
 
-## Select payment candidates at runtime
+## Select runtime-discovered candidates
 
-Payment methods are not trusted from an event snapshot alone. After the browser reaches a supported form, the main process discovers explicit top-level payment controls and persists a fingerprinted checkpoint.
+Ticket type, quantity, application entry, and payment method are not trusted from an event snapshot alone. After the browser reaches a supported form, the main process discovers every explicit top-level control group and persists a fingerprinted checkpoint.
 
-When a run pauses for payment selection:
+When a run pauses for candidate selection:
 
 1. Open **Task monitor**.
-2. Review each displayed payment group and enabled supported candidate.
+2. Review each displayed group and enabled, supported candidate.
 3. Select exactly one candidate for every required group.
 4. Select **Submit selected payment**.
 5. Wait for the reviewed run to enter **Awaiting final confirmation**.
 
 The renderer sends only candidate IDs plus the task, run, checkpoint revision, and control fingerprint. The main process resolves exact DOM values from the stored checkpoint, revalidates the run and device binding, and rejects stale, disabled, unsupported, ambiguous, duplicate, cross-run, or reordered candidates. The system never chooses a first option merely because it is available.
 
+That first selection is remembered — by group and DOM value, never by the run-specific candidate ID — for every other run under the same task and day/entry. The next run's checkpoint is matched against it automatically: if every group resolves to an enabled, unambiguous candidate, the run proceeds without pausing; if anything doesn't match confidently (the page changed, a candidate disappeared), it pauses for a human exactly like the first run did. Day1 and Day2 (or separate application entries) keep independent selections, since their forms can differ.
+
 ## Confirm or take over a run
 
 The decision center in **Task monitor** exposes only state-appropriate actions:
 
 - **Awaiting final confirmation**: review the account, selected candidates, and page state. Select **Confirm and submit** only when the application is correct. This is the only final-submit route.
-- **Awaiting manual action**: use the real browser only for CAPTCHA, device verification, card details, unknown controls, or other genuinely blocked conditions. Login and email-code prompts are handled automatically when the mailbox configuration can safely identify the current account.
+- **Awaiting manual action**: use the real browser only for CAPTCHA, device verification, card details, unknown controls, or other genuinely blocked conditions — see the network-lease-vs-browser-challenge distinction above. Login and email-code prompts are handled automatically when the mailbox configuration can safely identify the current account.
 - **Unknown submission state**: select **Reconcile submission status**. Reconciliation is read-only and may resolve to submitted, already applied, or failed. It never retries submission automatically.
 
 The app pauses before card number, CVV, expiry, cardholder, CAPTCHA, slider, phone, or device-verification input. It does not bypass challenges, spoof arbitrary device identities, replay HAR traffic, evaluate page `onclick` code, or submit unknown consent controls. A final dispatch also requires a current one-time authorization, payment checkpoint, profile binding, and dispatch lease.
+
+Once a task reaches **Completed**, **Failed**, or **Cancelled**, its row shows **Delete task** instead of **Cancel task** — deleting removes the task and its runs from local storage. A running or queued task must be cancelled first.
 
 ## Fixture mode and live-smoke guard
 
@@ -214,10 +244,13 @@ The runner validates the committed `tests/fixtures/sanitized-payment-device.har`
 | Electron opens with no renderer | Run `npm run build`, then `npm start`. The app loads `dist-electron/` and `dist/`, both regenerated by the scripts. |
 | Electron behaves like Node | Run `npm run dev` or `npm start`; both clear `ELECTRON_RUN_AS_NODE` before launching Electron. |
 | Browser cannot start | Verify `EPLUS_BROWSER_EXECUTABLE` points to an installed Chrome/Edge/Chromium binary, or install one; Electron is not used as the browser executable. |
-| Payment selection is unavailable | Confirm the browser reached a supported, top-level payment form. Disabled, unknown, delayed, embedded, or ambiguous controls deliberately require manual action. |
+| Candidate selection is unavailable | Confirm the browser reached a supported, top-level form. Disabled, unknown, delayed, embedded, or ambiguous controls deliberately require manual action. |
+| A run's network lease keeps failing even though **Detect IP** looks fine | Detecting IP and acquiring a lease aren't the same check. If you're iterating with `npm run dev`, confirm you restarted it after any main-process change (see above) — `npm start` always rebuilds fresh, so this isn't a factor there. In Clash/sing-box mode, confirm **Current group** is a real proxy group name, not an individual server name, and that **Read nodes** actually returned members for it. In direct mode, confirm **要求国家** matches what **Detect IP** actually reports. |
+| Importing a Clash config throws "未找到有效的 Clash API external-controller" | The parser tolerates quoted values and trailing inline `# comments`, but still needs a plain `host:port` (or `[ipv6]:port`) address. If it keeps failing, type the host/port/secret into **代理控制器** directly instead of relying on import — that path never depends on parsing succeeding. |
 | A device profile is already in use | Stop or cancel the owning run and wait for its browser context to close. The per-account/per-profile lock prevents concurrent reuse. |
 | Mailbox test fails | Check mode, endpoint, recipient address, provider/app ID, sender/subject rules, and encrypted credential values. Manual mode is valid when automatic reading is not appropriate. |
 | Run is in unknown submission state | Use read-only reconciliation. Do not queue the same run for a second submission. |
+| Can't delete a task or event snapshot | A task must be **Completed**, **Failed**, or **Cancelled** first. A snapshot can't be deleted while a non-terminal task still references it. |
 
 ## Repository hygiene
 

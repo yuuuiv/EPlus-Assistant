@@ -149,19 +149,33 @@
 .disclosure div { display: grid; gap: var(--space-1); }
 .disclosure span { color: var(--text-muted); font-size: 0.82rem; }
 .disclosure-warning { border-color: color-mix(in srgb, var(--warning) 35%, transparent); background: color-mix(in srgb, var(--warning) 9%, transparent); }
-.check-row { display: inline-flex; grid-template-columns: auto 1fr; align-items: center; gap: var(--space-2); color: var(--text); font-weight: 400; }
-.check-row input { width: auto; }
+/* A checkable chip: consistent bordered/filled treatment for every checkbox or
+   radio row in the app (day-selection, risk acknowledgement, payment/serial-code/
+   node pickers), so plain native controls don't look out of place next to the
+   redesigned account-picker/serial-code chip styling. */
+.check-row { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text); font-weight: 400; padding: 0.45rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-a); transition: border-color var(--transition), background var(--transition); }
+.check-row:has(input:checked) { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface-a)); }
+.check-row input { width: auto; accent-color: var(--primary); }
+.check-row input:disabled { accent-color: var(--text-subtle); }
+.check-row-group { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .subsection-head { margin-top: var(--space-5); }
 .account-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, 1fr) minmax(10rem, 1fr) auto; gap: var(--space-3); align-items: center; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-stripe); }
 .account-review > div:first-child { display: grid; gap: var(--space-1); min-width: 0; }
 .account-review > div:first-child span { color: var(--text-muted); overflow-wrap: anywhere; font-size: 0.82rem; }
 .review-days { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.serial-assignment { display: grid; gap: var(--space-3); margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-stripe); }
-.serial-assignment-toolbar, .serial-plan-controls, .serial-code-picker, .serial-plan-items { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
-.serial-plan-controls { align-items: end; }
+.serial-assignment { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-stripe); }
+.serial-assignment-toolbar, .serial-plan-controls, .serial-plan-items { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+.serial-plan-controls { align-items: end; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-a); }
 .serial-plan-controls fieldset { border: 0; padding: 0; margin: 0; }
 .serial-plan-controls legend { color: var(--text-muted); font-size: 0.8rem; margin-bottom: var(--space-1); }
-.serial-code-picker { max-height: 12rem; overflow: auto; padding: var(--space-3); border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg-surface); }
+.serial-code-picker { max-height: 14rem; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); }
+.node-checklist { display: grid; gap: var(--space-3); }
+.node-checklist-grid { max-height: 14rem; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); }
+.node-checklist-grid .check-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-checklist-grid .check-row small { color: var(--text-subtle); flex-shrink: 0; font-size: 0.74rem; }
+.import-config { margin-top: var(--space-4); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-stripe); }
+.import-config summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; }
+.import-config[open] summary { margin-bottom: var(--space-3); }
 .serial-plan-list { display: grid; gap: var(--space-2); }
 .serial-plan-card { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); }
 .serial-plan-card > div:first-child { display: flex; justify-content: space-between; gap: var(--space-3); }
@@ -252,16 +266,32 @@ button, input, select, textarea { font: inherit; }
 }
 .sidebar-foot { display: flex; gap: var(--space-2); align-items: center; margin-block-start: auto; padding: var(--space-4) var(--space-3) 0; color: var(--text-subtle); font-size: 0.75rem; }
 .workspace { min-block-size: 0; overflow: auto; padding: var(--space-6); }
-.workspace-panel { display: grid; gap: var(--space-5); max-inline-size: 100rem; margin-inline: auto; animation: workspace-in 200ms var(--ease-out) both; }
+.workspace-panel { display: grid; gap: var(--space-5); max-inline-size: 100rem; margin-inline: auto; }
+/* Stagger the panel's direct sections in rather than fading the whole panel as one block (§10 Stagger, 30–80ms). */
+.workspace-panel > * { animation: workspace-in 220ms var(--ease-out) both; }
+.workspace-panel > *:nth-child(2) { animation-delay: 40ms; }
+.workspace-panel > *:nth-child(3) { animation-delay: 80ms; }
+.workspace-panel > *:nth-child(4) { animation-delay: 120ms; }
 .workspace-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
 .workspace-heading h1 { margin: 0; background: none; -webkit-text-fill-color: currentColor; color: var(--text); font-size: 1.7rem; }
 .workspace-heading p { margin: var(--space-1) 0 0; color: var(--text-muted); max-inline-size: 60ch; }
 .section-kicker { color: var(--primary) !important; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; }
 .panel-layout-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr)); gap: var(--space-4); }
-.panel-card { position: relative; display: grid; gap: var(--space-4); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); box-shadow: var(--shadow-sm); }
+/* flex (not grid) so `.actions` can sink to the bottom via margin-top:auto when a
+   sibling panel-card in a stretched two-column row (.panel-layout-two) is taller. */
+.panel-card { position: relative; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); box-shadow: var(--shadow-sm); }
 /* §12 Materials: a bright top edge reads as light catching a glass surface */
 .panel-card::before { content: ""; position: absolute; inset: 0 0 auto; block-size: 1px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: linear-gradient(90deg, transparent, var(--edge-highlight), transparent); pointer-events: none; }
-.message-banner { max-inline-size: 100rem; margin: 0 auto var(--space-4); padding: var(--space-3) var(--space-4); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 38%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--warning) 9%, transparent); animation: message-in 220ms var(--ease-out) both; }
+/* Fixed to the viewport (not the scrollable .workspace flow) so success/failure feedback
+   stays visible regardless of scroll position, and layered above all panel content. */
+.message-banner { position: fixed; top: var(--space-4); inset-inline: 0; z-index: 1000; max-inline-size: min(64rem, calc(100vw - 2 * var(--space-6))); margin-inline: auto; padding: var(--space-3) var(--space-4); display: flex; align-items: center; gap: var(--space-2); border-radius: var(--radius); background: var(--bg-surface-solid); box-shadow: var(--shadow-lg); animation: message-in 220ms var(--ease-out) both; transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); }
+.message-banner svg { flex: 0 0 auto; }
+.message-banner span { flex: 1 1 auto; }
+.message-banner.message-leaving { opacity: 0; transform: translateY(-4px); animation: none; }
+.message-success { color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 38%, transparent); background: color-mix(in srgb, var(--success) 9%, transparent); }
+.message-error   { color: var(--danger-hover); border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.message-dismiss { margin-inline-start: auto; padding: 0.3rem; border-color: transparent; background: transparent; color: inherit; opacity: 0.7; }
+.message-dismiss:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); border-color: transparent; }
 @keyframes message-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ── Theme toggle ────────────────────────────────────────────────────── */
@@ -804,8 +834,13 @@ tbody tr:last-child td { border-bottom: none; }
 .log.warn  strong { color: var(--warning); }
 
 /* ── Actions bar ─────────────────────────────────────────────────────── */
+/* margin-top:auto (not a fixed value) sinks this to the bottom of a flex
+   .panel-card that got stretched taller than its content by a sibling in a
+   two-column row (.panel-layout-two), so action buttons line up across columns.
+   padding-top/border-top stay fixed so the divider always sits just above the
+   buttons, whether or not there was extra space to push through. */
 .actions {
-  margin-top: 0.9rem;
+  margin-top: auto;
   padding-top: 0.9rem;
   border-top: 1px solid var(--border);
 }
@@ -845,7 +880,7 @@ tbody tr:last-child td { border-bottom: none; }
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  .workspace-panel { animation: none !important; opacity: 1; transform: none; }
+  .workspace-panel, .workspace-panel > * { animation: none !important; opacity: 1; transform: none; }
   button:active { transform: none; }
   .progress-track.indeterminate .progress-fill { position: static; width: 45%; animation: none; opacity: 0.7; }
 }
@@ -879,15 +914,15 @@ tbody tr:last-child td { border-bottom: none; }
   .sidebar,
   .panel-card { background: var(--bg-surface-solid); }
 }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .account-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
 .account-picker legend { font-size: .82rem; font-weight: 650; margin-bottom: .5rem; }
 .account-picker-actions { display: flex; gap: .5rem; margin-bottom: .55rem; }
-.account-picker-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .5rem; padding: .7rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface-2); }
-.account-picker-item { display: flex; align-items: center; gap: .5rem; min-width: 0; padding: .45rem .55rem; border-radius: .45rem; }
-.account-picker-item:hover { background: var(--surface-3); }
-.account-picker-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-picker-item small, .network-node-row small { color: var(--text-faint); margin-left: auto; }
-.account-picker-item.disabled { opacity: .55; }
-.network-node-list { display: grid; gap: .5rem; margin: .8rem 0; }
-.network-node-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .65rem .8rem; border: 1px solid var(--border); border-radius: .55rem; background: var(--surface-2); }
-.network-node-row span { display: flex; align-items: baseline; gap: .7rem; min-width: 0; }
+.account-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .55rem; padding: .85rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-a); }
+.account-picker-item { display: flex; align-items: center; gap: .6rem; min-width: 0; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); transition: border-color var(--transition), background var(--transition), box-shadow var(--transition); }
+.account-picker-item:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.account-picker-item:has(input:checked) { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--bg-surface)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent); }
+.account-picker-item input[type="checkbox"] { flex: 0 0 auto; width: 1.05rem; height: 1.05rem; accent-color: var(--primary); }
+.account-picker-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.account-picker-item small { color: var(--text-subtle); margin-left: auto; font-size: .74rem; }
+.account-picker-item.disabled { opacity: .5; background: var(--surface-a); cursor: not-allowed; }

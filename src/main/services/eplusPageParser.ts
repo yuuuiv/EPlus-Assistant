@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as cheerio from "cheerio";
-import type { EplusRawFormSchema, EventOption, EventSnapshot } from "../../shared/types.js";
+import type { AvailableDayOption, EplusRawFormSchema, EventOption, EventSnapshot } from "../../shared/types.js";
 import { discoverRuntimePaymentOptions } from "./runtimePaymentDiscovery.js";
 
 export interface ParsedEplusPage {
@@ -141,9 +141,9 @@ function parseApplications($: cheerio.CheerioAPI, baseUrl: string): Array<{
       .first();
     const href = applicationAnchor.length ? absoluteUrl(baseUrl, applicationAnchor.attr("href")) ?? onclickUrl(baseUrl, applicationAnchor.attr("onclick")) : undefined;
     const status = containerText.match(/受付中|受付前|受付終了|予定枚数終了|販売終了|抽選受付中/)?.[0];
-    const dayMarker = containerText.match(/[＜<]\s*(DAY1|DAY2|第一日|第二日)\s*[＞>]/iu)?.[1]?.toUpperCase();
+    const dayMarkerText = containerText.match(/[＜<]\s*(?:DAY1|DAY2|第一日|第二日)\s*[＞>]/iu)?.[0];
     const label =
-      (dayMarker ? `${dayMarker} ` : "") + (
+      (dayMarkerText ?? "") + (
       normalizeText(article.find("h3, h4, .block-ticket__title, .block-ticket-0__title").first().text()) ||
       containerText.match(/(抽選|先行|プレオーダー|一般発売|受付)[^。]{0,80}/)?.[0] ||
       `受付 ${index + 1}`);
@@ -179,12 +179,12 @@ function parseApplications($: cheerio.CheerioAPI, baseUrl: string): Array<{
     }
     const containerText = normalizeText((article.length ? article : current.parent()).text());
     const sessionMatch = text.match(/＜(.+?)＞お申込み/);
-    const dayMarker = containerText.match(/[＜<]\s*(DAY1|DAY2|第一日|第二日)\s*[＞>]/iu)?.[1]?.toUpperCase();
+    const dayMarkerText = containerText.match(/[＜<]\s*(?:DAY1|DAY2|第一日|第二日)\s*[＞>]/iu)?.[0];
     const status =
       containerText.match(/受付中|受付前|受付終了|予定枚数終了|販売終了|抽選受付中/)?.[0] ||
       text.match(/受付中|受付前|受付終了|予定枚数終了|販売終了|抽選受付中/)?.[0];
     const label =
-      (dayMarker ? `${dayMarker} ` : "") + (sessionMatch?.[1] ||
+      (dayMarkerText && !sessionMatch?.[1]?.includes(dayMarkerText.replace(/[＜<＞>]/gu, "")) ? dayMarkerText : "") + (sessionMatch?.[1] ||
       containerText.match(/(プレオーダー|先行抽選|一般発売|抽選受付|受付)[^。<]{0,80}/)?.[0] ||
       text ||
       `申込み ${index + 1}`);
@@ -198,7 +198,7 @@ function parseApplications($: cheerio.CheerioAPI, baseUrl: string): Array<{
       label,
       href,
       status,
-      sessionName: sessionMatch?.[1] ?? dayMarker,
+      sessionName: sessionMatch?.[1] ?? dayMarkerText,
       selectorHint: sessionMatch ? `link-text:＜${sessionMatch[1]}＞お申込み` : undefined
     });
   });
@@ -262,9 +262,13 @@ export function parseEplusPage(sourceUrl: string, html: string): ParsedEplusPage
   options.push(...buildRuntimeOptions(html));
 
   const notes: string[] = [];
-  const availableDays = Array.from(new Set(applications.flatMap((application) => /DAY1|第一日/iu.test(application.label) ? ["day1" as const] : /DAY2|第二日/iu.test(application.label) ? ["day2" as const] : [])));
+  const availableDays: AvailableDayOption[] = [];
+  for (const application of applications) {
+    const day = /DAY1|第一日/iu.test(application.label) ? ("day1" as const) : /DAY2|第二日/iu.test(application.label) ? ("day2" as const) : undefined;
+    if (day && !availableDays.some((option) => option.day === day)) availableDays.push({ day, label: application.label });
+  }
   if (serialRequired) {
-    notes.push("检测到シリアルナンバー/抽选码流程；每个账号运行前需要提供公共或账号专用抽选码。");
+    notes.push("检测到シリアルナンバー/抽选码流程；请在创建任务时用抽选码分配器为每个账号单独分配抽选码（每个码有各自的使用次数限制）。");
   }
   if (bodyText.includes("電話番号認証が必要")) {
     notes.push("页面包含电话认证提示文案；仅当实际出现电话/SMS输入控件时才判定为电话验证挑战。");
@@ -272,7 +276,7 @@ export function parseEplusPage(sourceUrl: string, html: string): ParsedEplusPage
   if (bodyText.includes("受付は終了")) {
     notes.push("页面显示受付已结束；任务可保存但不应提交。");
   }
-  if (applications.length === 0) {
+  if (applications.length === 0 && !serialRequired) {
     notes.push("未发现可点击的申込み入口；可能是受付前/结束、页面结构变化，或入口由脚本动态生成。");
   }
 
@@ -304,7 +308,7 @@ export function parseEplusPage(sourceUrl: string, html: string): ParsedEplusPage
     },
     requiresManualInspection:
       sourceKind === "unknown" ||
-      applications.length === 0 ||
+      (applications.length === 0 && !serialRequired) ||
       bodyText.includes("受付は終了"),
     notes
   };

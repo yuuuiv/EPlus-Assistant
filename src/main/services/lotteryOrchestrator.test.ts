@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableJson } from "../../core/digest.js";
-import type { AccountRun, EventOption, EventSnapshot, LotteryTask } from "../../shared/types.js";
+import type { AccountRun, EventOption, EventSnapshot, LotteryTask, PaymentOptionGroup } from "../../shared/types.js";
 import { AppDatabase } from "../storage/database.js";
 import { LotteryOrchestrator, recoverSubmittingRuns } from "./lotteryOrchestrator.js";
 import { NetworkService } from "./networkService.js";
 import { SubmissionGuard } from "./submissionGuard.js";
+import { DecisionTemplateStore, type SettingsStore } from "./decisionTemplateStore.js";
 import type { PageState } from "../engines/pageStateClassifier.js";
 import type { ReviewPageData } from "../adapters/eplusAdapter.js";
 
@@ -54,6 +55,61 @@ describe("LotteryOrchestrator", () => {
     expect(authorization.selectedOptions).toEqual([{ groupKey: "payment", candidateId: "payment:store", domValue: "store" }]);
     expect(resumed.status).toBe("AwaitingSubmitConfirmation");
     expect(adapter.applyPreference).toHaveBeenCalledOnce();
+  });
+
+  it("auto-applies a saved decision template instead of pausing for payment selection", async () => {
+    const fixture = await createFixture();
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    const templates = new DecisionTemplateStore(memoryStore());
+    templates.save(fixture.task.id, "default", [{ groupKey: "payment", domValue: "store", label: "Store" }]);
+    const orchestrator = new LotteryOrchestrator({ startNetworkSession: vi.fn(async () => true), reuseSession: vi.fn(async () => false), manualTakeover: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }, adapter, new NetworkService({ rotate: vi.fn(async () => undefined), detectIp: vi.fn(async () => ({ ip: "1.1.1.1", country: "Japan", region: "Tokyo" })) }, { getSetting: () => undefined }), fixture.db, {}, (cipher) => `decrypted-${cipher}`, new SubmissionGuard(fixture.db, "registry"), templates);
+
+    const result = await orchestrator.runSingleAccount({ run: fixture.run, task: fixture.task, event: fixture.event });
+
+    expect(result.status).toBe("AwaitingSubmitConfirmation");
+    expect(adapter.applyPreference).toHaveBeenCalledOnce();
+    expect(fixture.db.getPaymentSelections(fixture.run.id)).toEqual([{ groupKey: "payment", candidateId: "payment:store", domValue: "store" }]);
+  });
+
+  it("clicks through an InterstitialConsent notice automatically before continuing", async () => {
+    const fixture = await createFixture();
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    adapter.detectChallenge.mockResolvedValueOnce("InterstitialConsent").mockResolvedValueOnce("LotteryForm");
+    const orchestrator = createOrchestrator(fixture.db, adapter);
+
+    await orchestrator.runSingleAccount({ run: fixture.run, task: fixture.task, event: fixture.event });
+
+    expect(adapter.acknowledgeInterstitial).toHaveBeenCalledOnce();
+  });
+
+  it("auto-resolves a CheckboxGate using a saved consent template without a manual pause", async () => {
+    const fixture = await createFixture();
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    adapter.detectChallenge.mockResolvedValueOnce("CheckboxGate").mockResolvedValueOnce("LotteryForm");
+    const consentGroup = { groupKey: "consent-0", groupOrder: 0, controlType: "input" as const, selectorEvidence: evidence(), options: [{ candidateId: "consent-0:agree", groupKey: "consent-0", groupOrder: 0, optionOrder: 0, controlType: "input" as const, domValue: "agree", label: "agree", enabled: true, supported: true, ambiguous: false, selectorEvidence: evidence() }] };
+    adapter.discoverConsentControls.mockResolvedValue([consentGroup]);
+    const templates = new DecisionTemplateStore(memoryStore());
+    templates.save(fixture.task.id, "consent:default", [{ groupKey: "consent-0", domValue: "agree", label: "agree" }]);
+    const orchestrator = new LotteryOrchestrator({ startNetworkSession: vi.fn(async () => true), reuseSession: vi.fn(async () => false), manualTakeover: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }, adapter, new NetworkService({ rotate: vi.fn(async () => undefined), detectIp: vi.fn(async () => ({ ip: "1.1.1.1", country: "Japan", region: "Tokyo" })) }, { getSetting: () => undefined }), fixture.db, {}, (cipher) => `decrypted-${cipher}`, new SubmissionGuard(fixture.db, "registry"), templates);
+
+    await orchestrator.runSingleAccount({ run: fixture.run, task: fixture.task, event: fixture.event });
+
+    expect(adapter.applyConsentSelections).toHaveBeenCalledWith(["consent-0:agree"]);
+  });
+
+  it("falls back to a manual pause with the discovered consent candidates when no template matches", async () => {
+    const fixture = await createFixture();
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    adapter.detectChallenge.mockResolvedValue("CheckboxGate");
+    const consentGroup = { groupKey: "consent-0", groupOrder: 0, controlType: "input" as const, selectorEvidence: evidence(), options: [{ candidateId: "consent-0:agree", groupKey: "consent-0", groupOrder: 0, optionOrder: 0, controlType: "input" as const, domValue: "agree", label: "agree", enabled: true, supported: true, ambiguous: false, selectorEvidence: evidence() }] };
+    adapter.discoverConsentControls.mockResolvedValue([consentGroup]);
+    const orchestrator = createOrchestrator(fixture.db, adapter);
+
+    const result = await orchestrator.runSingleAccount({ run: fixture.run, task: fixture.task, event: fixture.event });
+
+    expect(result.status).toBe("AwaitingManualAction");
+    expect(result.resumeCheckpoint).toEqual({ manualReason: "checkbox-gate", templateKey: "consent:default", consentCandidates: [{ groupKey: "consent-0", domValue: "agree", label: "agree" }] });
+    expect(adapter.applyConsentSelections).not.toHaveBeenCalled();
   });
 
   it("returns to manual action when a bound review changes before confirmation", async () => {
@@ -134,6 +190,20 @@ describe("LotteryOrchestrator", () => {
     expect(engine.startNetworkSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: fixture.task.id, deviceProfileKey: "iphone-13", launchGuard: expect.any(Function) }));
   });
 
+  it("surfaces the specific network-lease rejection reason instead of one generic sentence", async () => {
+    const fixture = await createFixture();
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    const engine = { startNetworkSession: vi.fn(async () => false), reuseSession: vi.fn(async () => false), manualTakeover: vi.fn(async () => undefined), close: vi.fn(async () => undefined), lastNetworkFailureReason: vi.fn(() => "Network configuration is missing") };
+    const network = new NetworkService({ rotate: vi.fn(async () => undefined), detectIp: vi.fn(async () => ({ ip: "1.1.1.1", country: "Japan", region: "Tokyo" })) }, { getSetting: () => undefined });
+    const orchestrator = new LotteryOrchestrator(engine, adapter, network, fixture.db, {}, (cipher) => `decrypted-${cipher}`, new SubmissionGuard(fixture.db, "registry"));
+
+    const paused = await orchestrator.runSingleAccount({ ...fixture });
+
+    expect(paused.status).toBe("AwaitingManualAction");
+    expect(paused.resumeCheckpoint?.manualReason).toBe("network");
+    expect(paused.errorDetailRedacted).toContain("网络设置尚未保存");
+  });
+
   it("threads lease validation through submitApplication at the action boundary", async () => {
     const fixture = await createFixture();
     const review: ReviewPageData = { state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" };
@@ -154,6 +224,47 @@ describe("LotteryOrchestrator", () => {
     expect(adapter.submitApplication).toHaveBeenCalledWith(expect.any(Function));
     expect(validatorCalled).toBe(true);
     expect(result.status).toBe("Submitted");
+  });
+
+  it("closes a stale session and re-navigates when a different run for the same account starts", async () => {
+    const fixture = await createFixture();
+    const secondRun: AccountRun = { id: "run-2", taskId: fixture.task.id, accountId: fixture.run.accountId, status: "Pending", paymentState: "Idle", resumeCheckpoint: {}, createdAt: fixture.task.createdAt, updatedAt: fixture.task.createdAt };
+    fixture.db.createRun(secondRun);
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    let owner: { runId: string; accountId: string } | undefined;
+    const engine = {
+      startNetworkSession: vi.fn(async (input: { runId: string; accountId: string }) => { owner = { runId: input.runId, accountId: input.accountId }; return true; }),
+      reuseSession: vi.fn(async () => false),
+      manualTakeover: vi.fn(async () => undefined),
+      close: vi.fn(async () => { owner = undefined; }),
+      isSessionActive: vi.fn(() => owner !== undefined),
+      currentOwnership: vi.fn(() => owner)
+    };
+    const network = new NetworkService({ rotate: vi.fn(async () => undefined), detectIp: vi.fn(async () => ({ ip: "1.1.1.1", country: "Japan", region: "Tokyo" })) }, { getSetting: () => undefined });
+    const orchestrator = new LotteryOrchestrator(engine, adapter, network, fixture.db, {}, (cipher) => `decrypted-${cipher}`, new SubmissionGuard(fixture.db, "registry"));
+
+    const first = await orchestrator.runSingleAccount({ run: fixture.run, task: fixture.task, event: fixture.event });
+    expect(first.status).toBe("AwaitingManualAction");
+    expect(adapter.openEvent).toHaveBeenCalledTimes(1);
+    expect(engine.close).not.toHaveBeenCalled();
+
+    await orchestrator.runSingleAccount({ run: fixture.db.listRuns().find((run) => run.id === "run-2")!, task: fixture.task, event: fixture.event });
+
+    expect(engine.close).toHaveBeenCalledOnce();
+    expect(adapter.openEvent).toHaveBeenCalledTimes(2);
+    expect(engine.startNetworkSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("navigates to the run's resolved application-link entry instead of the event's canonical URL", async () => {
+    const fixture = await createFixture();
+    const eventWithLinks: EventSnapshot = { ...fixture.event, rawFormSchema: { ...fixture.event.rawFormSchema, applicationLinks: [{ id: "link-day1", label: "<DAY1>シリアル先行", href: "https://eplus.jp/sf/detail/111?P6=1" }, { id: "link-day2", label: "<DAY2>シリアル先行", href: "https://eplus.jp/sf/detail/222?P6=2" }] } };
+    const runWithLink: AccountRun = { ...fixture.run, serialPlan: { code: "CODE1", applicationLinkId: "link-day2" } };
+    const adapter = adapterFixture({ state: "LotteryForm", url: "https://eplus.jp/review", text: "Review" });
+    const orchestrator = createOrchestrator(fixture.db, adapter);
+
+    await orchestrator.runSingleAccount({ run: runWithLink, task: fixture.task, event: eventWithLinks });
+
+    expect(adapter.openEvent).toHaveBeenCalledWith("https://eplus.jp/sf/detail/222?P6=2");
   });
 
   it("rejects dispatch when lease is fenced before the submit action", async () => {
@@ -187,7 +298,7 @@ async function createFixture(): Promise<{ db: AppDatabase; task: LotteryTask; ru
 }
 
 function adapterFixture(review: ReviewPageData) {
-  return { openEvent: vi.fn(async () => undefined), detectChallenge: vi.fn(async (): Promise<PageState> => "LotteryForm"), login: vi.fn(async () => undefined), enterEmailCode: vi.fn(async () => undefined), readAvailableOptions: vi.fn(async (): Promise<EventOption[]> => []), discoverPaymentOptions: vi.fn(async () => ({ status: "ready" as const, groups: [{ groupKey: "payment", groupOrder: 0, controlType: "input" as const, selectorEvidence: evidence(), options: [{ candidateId: "payment:store", groupKey: "payment", groupOrder: 0, optionOrder: 0, controlType: "input" as const, domValue: "store", label: "Store", enabled: true, supported: true, ambiguous: false, selectorEvidence: evidence() }] }] })), applyPreference: vi.fn(async () => undefined), readReviewPage: vi.fn(async () => review), submitApplication: vi.fn(async () => ({ url: "https://eplus.jp/receipt", receiptText: "受付番号: EP12345678" })), readReceipt: vi.fn(async () => ({ url: "https://eplus.jp/receipt", receiptText: "受付番号: EP12345678" })) };
+  return { openEvent: vi.fn(async () => undefined), detectChallenge: vi.fn(async (): Promise<PageState> => "LotteryForm"), login: vi.fn(async () => undefined), enterEmailCode: vi.fn(async () => undefined), readAvailableOptions: vi.fn(async (): Promise<EventOption[]> => []), discoverPaymentOptions: vi.fn(async () => ({ status: "ready" as const, groups: [{ groupKey: "payment", groupOrder: 0, controlType: "input" as const, selectorEvidence: evidence(), options: [{ candidateId: "payment:store", groupKey: "payment", groupOrder: 0, optionOrder: 0, controlType: "input" as const, domValue: "store", label: "Store", enabled: true, supported: true, ambiguous: false, selectorEvidence: evidence() }] }] })), applyPreference: vi.fn(async () => undefined), readReviewPage: vi.fn(async () => review), submitApplication: vi.fn(async () => ({ url: "https://eplus.jp/receipt", receiptText: "受付番号: EP12345678" })), readReceipt: vi.fn(async () => ({ url: "https://eplus.jp/receipt", receiptText: "受付番号: EP12345678" })), acknowledgeInterstitial: vi.fn(async () => undefined), discoverConsentControls: vi.fn(async (): Promise<PaymentOptionGroup[]> => []), applyConsentSelections: vi.fn(async () => undefined), confirmConsentChecked: vi.fn(async (candidates: readonly { groupKey: string; domValue: string; label: string }[]) => candidates) };
 }
 
 function createOrchestrator(db: AppDatabase, adapter: ReturnType<typeof adapterFixture>): LotteryOrchestrator {
@@ -207,6 +318,11 @@ function prepareAuthorization(db: AppDatabase, runId: string, _reviewDigest: str
   db.updateRun({ id: run.id, status: "FillingForm", paymentState: "PaymentDiscoveryPending" });
   guard.saveDiscovery(checkpoint);
   return guard.select({ taskId: "task", runId, checkpointId: "checkpoint", checkpointRevision: 1, candidateIds: ["candidate"], expectedControlFingerprint: controlFingerprint }, 1);
+}
+
+function memoryStore(): SettingsStore {
+  const values = new Map<string, unknown>();
+  return { getSetting: <T>(key: string) => values.get(key) as T | undefined, setSetting: (key: string, value: unknown) => { values.set(key, value); } };
 }
 
 function evidence() { return { scope: "document" as const, tag: "input" as const, groupOrdinal: 0, optionOrdinal: 0, allowedAttributes: { name: "payment", type: "radio", dataPaymentGroup: "payment" }, contextGeneration: "context" }; }

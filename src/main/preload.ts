@@ -8,8 +8,10 @@ const api: ElectronApi = {
   deleteAccount: (id) => ipcRenderer.invoke("account:delete", id),
   discoverEvent: (input) => ipcRenderer.invoke("event:discover", input),
   saveEventSnapshot: (input) => ipcRenderer.invoke("event:save", input),
+  deleteEventSnapshot: (id) => ipcRenderer.invoke("event:delete", id),
   createTask: (input) => ipcRenderer.invoke("task:create", input),
   createTaskV2: (input) => ipcRenderer.invoke("task:create-v2", input),
+  deleteTask: (taskId) => ipcRenderer.invoke("task:delete", taskId),
   enqueueTask: (taskId) => ipcRenderer.invoke("queue:enqueue-task", taskId),
   pauseQueue: () => ipcRenderer.invoke("queue:pause"),
   resumeQueue: () => ipcRenderer.invoke("queue:resume"),
@@ -41,8 +43,7 @@ const api: ElectronApi = {
   importNetworkConfig: (input) => ipcRenderer.invoke("settings:import-network", input),
   detectIp: () => ipcRenderer.invoke("network:detect"),
   rotateIp: () => ipcRenderer.invoke("network:rotate"),
-  listNetworkNodes: () => ipcRenderer.invoke("network:list-nodes"),
-  selectNetworkNode: (name) => ipcRenderer.invoke("network:select-node", name),
+  listNetworkNodes: (proxyGroup) => ipcRenderer.invoke("network:list-nodes", proxyGroup ? { proxyGroup } : undefined),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };
 

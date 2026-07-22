@@ -25,6 +25,7 @@ import type {
   VerificationMailboxUpdate,
   NetworkSettings,
   NetworkSettingsUpdate,
+  NetworkImportResult,
   NetworkNode,
   CreditCardSummary,
   VerificationCodeReadInput,
@@ -76,8 +77,10 @@ export interface ElectronApi {
   deleteAccount(id: string): Promise<void>;
   discoverEvent(input: DiscoverEventInput): Promise<EventSnapshotInput>;
   saveEventSnapshot(input: EventSnapshotInput): Promise<EventSnapshot>;
+  deleteEventSnapshot(id: string): Promise<void>;
   createTask(input: CreateTaskInput): Promise<{ taskId: string }>;
   createTaskV2(input: CreateTaskInputV2): Promise<{ taskId: string }>;
+  deleteTask(taskId: string): Promise<void>;
   enqueueTask(taskId: string): Promise<void>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
@@ -106,11 +109,10 @@ export interface ElectronApi {
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
   getNetworkSettings(): Promise<NetworkSettings>;
   saveNetworkSettings(input: NetworkSettingsUpdate): Promise<NetworkSettings>;
-  importNetworkConfig(input: NetworkImportInput): Promise<NetworkSettingsUpdate>;
+  importNetworkConfig(input: NetworkImportInput): Promise<NetworkImportResult>;
   detectIp(): Promise<IpIdentity>;
   rotateIp(): Promise<void>;
-  listNetworkNodes(): Promise<NetworkNode[]>;
-  selectNetworkNode(name: string): Promise<void>;
+  listNetworkNodes(proxyGroup?: string): Promise<NetworkNode[]>;
   openDataFolder(): Promise<void>;
 }
 
@@ -146,6 +148,7 @@ export type {
   VerificationMailboxUpdate,
   NetworkSettings,
   NetworkSettingsUpdate,
+  NetworkImportResult,
   NetworkNode,
   CreditCardSummary,
   CreateTaskInputV2

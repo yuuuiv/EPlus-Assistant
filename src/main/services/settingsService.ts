@@ -5,7 +5,8 @@ import type {
   VerificationMailboxSettings,
   VerificationMailboxUpdate,
   NetworkSettings,
-  NetworkSettingsUpdate
+  NetworkSettingsUpdate,
+  NetworkImportResult
 } from "../../shared/types.js";
 import type { ClashConfig } from "../adapters/networkRotationProvider.js";
 import { createMailProvider, DEFAULT_CERISE_BOUQUET_ENDPOINT, type ApplicationConfirmationResult, type MailProviderConfig } from "../adapters/mailProviders.js";
@@ -94,9 +95,25 @@ export class SettingsService {
   }
 
   getNetworkSettings(): NetworkSettings {
-    const stored = this.db.getSetting<NetworkSettings>(NETWORK_SETTING_KEY);
-    if (stored) return { ...stored, controller: stored.controller ?? "clash", secretConfigured: stored.secretConfigured || Boolean(process.env.EPLUS_CLASH_SECRET?.trim()) };
-    return envNetworkSettings() ?? defaultNetworkSettings;
+    // Reconstruct explicitly (rather than spreading the raw stored blob) so a settings row
+    // saved under an older schema - e.g. the retired flat `selectedNodes` field - can never leak
+    // an unrecognized key back out to the renderer, where the strict IPC save schema would
+    // reject it as soon as the user tries to save again.
+    const stored = this.db.getSetting<NetworkSettings & { selectedNodes?: string[] }>(NETWORK_SETTING_KEY);
+    if (!stored) return envNetworkSettings() ?? defaultNetworkSettings;
+    const migratedNodeSelections = stored.nodeSelectionsByGroup ?? (stored.selectedNodes?.length && stored.proxyGroup ? { [stored.proxyGroup]: stored.selectedNodes } : undefined);
+    return {
+      controller: stored.controller ?? "clash",
+      host: stored.host,
+      port: stored.port,
+      proxyGroup: stored.proxyGroup,
+      requiredCountry: stored.requiredCountry,
+      policy: stored.policy,
+      secretConfigured: stored.secretConfigured || Boolean(process.env.EPLUS_CLASH_SECRET?.trim()),
+      ...(stored.proxyGroups ? { proxyGroups: stored.proxyGroups } : {}),
+      ...(migratedNodeSelections ? { nodeSelectionsByGroup: migratedNodeSelections } : {}),
+      ...(stored.updatedAt ? { updatedAt: stored.updatedAt } : {})
+    };
   }
 
   saveNetworkSettings(input: NetworkSettingsUpdate): NetworkSettings {
@@ -108,6 +125,7 @@ export class SettingsService {
       port: Math.max(1, Math.floor(Number(input.port) || defaultNetworkSettings.port)),
       proxyGroup: input.proxyGroup.trim(),
       proxyGroups: input.proxyGroups?.map((group) => group.trim()).filter(Boolean) ?? existing.proxyGroups,
+      nodeSelectionsByGroup: input.nodeSelectionsByGroup ?? existing.nodeSelectionsByGroup,
       requiredCountry: input.requiredCountry.trim(),
       policy: input.policy.trim() || defaultNetworkSettings.policy,
       secretConfigured: Boolean(secret) || existing.secretConfigured,
@@ -119,18 +137,20 @@ export class SettingsService {
     return settings;
   }
 
-  importNetworkConfig(input: { readonly controller: "clash" | "sing-box"; readonly text: string }): NetworkSettingsUpdate {
+  importNetworkConfig(input: { readonly controller: "clash" | "sing-box"; readonly text: string }): NetworkImportResult {
     const parsed = parseNetworkControllerConfig(input.controller, input.text);
     const current = this.getNetworkSettings();
-    return { controller: input.controller, host: parsed.host, port: parsed.port, secret: parsed.secret, proxyGroup: parsed.proxyGroup, proxyGroups: parsed.proxyGroups, requiredCountry: current.requiredCountry, policy: current.policy };
+    return { controller: input.controller, host: parsed.host, port: parsed.port, secret: parsed.secret, proxyGroup: parsed.proxyGroup, proxyGroups: parsed.proxyGroups, availableNodes: parsed.availableNodes, requiredCountry: current.requiredCountry, policy: current.policy };
   }
 
   getClashConfig(): ClashConfig | undefined {
     const settings = this.getNetworkSettings();
+    if (settings.controller === "direct") return undefined;
     const encryptedSecret = this.db.getSetting<string>(NETWORK_SECRET_SETTING_KEY);
     const secret = encryptedSecret ? this.secretStore.decryptString(encryptedSecret) : process.env.EPLUS_CLASH_SECRET?.trim();
     if (!settings.host || !settings.proxyGroup || !secret) return undefined;
-    return { host: settings.host, port: settings.port, secret, proxyGroup: settings.proxyGroup };
+    const selectedNodes = settings.nodeSelectionsByGroup?.[settings.proxyGroup];
+    return { host: settings.host, port: settings.port, secret, proxyGroup: settings.proxyGroup, ...(selectedNodes?.length ? { selectedNodes } : {}) };
   }
 
   async testVerificationMailbox(): Promise<ValidationResult> {
@@ -287,7 +307,31 @@ function isSupportedMailboxMode(mode: VerificationMailboxUpdate["mode"]): mode i
   return supportedMailboxModes.some((supportedMode) => supportedMode === mode);
 }
 
-export function parseNetworkControllerConfig(controller: "clash" | "sing-box", source: string): { host: string; port: number; secret?: string; proxyGroup: string; proxyGroups: string[] } {
+/** Returns the text of a top-level YAML block (e.g. "proxies:" or "proxy-groups:"), stopping at the next top-level key or EOF. */
+function extractYamlSection(text: string, key: string): string {
+  const lines = text.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => new RegExp(`^${key}\\s*:\\s*$`).test(line));
+  if (startIndex === -1) return "";
+  const sectionLines: string[] = [];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^\S/.test(line)) break; // a non-indented line starts the next top-level key
+    sectionLines.push(line);
+  }
+  return sectionLines.join("\n");
+}
+
+/** Matches `name:` on a "- ..." list item, in both block style (own line) and flow style (`- {name: "x", ...}`). */
+function yamlListItemNames(sectionText: string): string[] {
+  const names: string[] = [];
+  for (const match of sectionText.matchAll(/-\s*\{?[^{}\r\n]*?\bname\s*:\s*["']?([^"',}\r\n]+?)["']?\s*(?:[,}]|$)/gimu)) {
+    const name = match[1]?.trim();
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+export function parseNetworkControllerConfig(controller: "clash" | "sing-box", source: string): { host: string; port: number; secret?: string; proxyGroup: string; proxyGroups: string[]; availableNodes: string[] } {
   const text = source.trim();
   if (!text) throw new Error("请粘贴 Clash 或 sing-box 配置内容。");
   let json: Record<string, unknown> | undefined;
@@ -302,26 +346,37 @@ export function parseNetworkControllerConfig(controller: "clash" | "sing-box", s
       const value = json ? readNestedScalar(json, key.split(".")) : undefined;
       if (value) return value;
       const match = text.match(new RegExp(`(?:^|\\n)\\s*(?:${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")})\\s*:\\s*["']?([^"'\\r\\n,}]+)`, "iu"));
-      if (match?.[1]?.trim()) return match[1].trim();
+      // Real-world configs commonly annotate a value with a trailing inline comment
+      // (e.g. "external-controller: 127.0.0.1:9090  # do not change"); without stripping it
+      // the address-format check below fails and the whole import is rejected.
+      const cleaned = match?.[1]?.replace(/\s+#.*$/, "").trim();
+      if (cleaned) return cleaned;
     }
     return undefined;
   };
   const address = scalar(controller === "sing-box" ? ["experimental.clash_api.external_controller", "external_controller", "external-controller"] : ["external-controller", "external_controller"]);
   const secret = scalar(["experimental.clash_api.secret", "secret"]);
-  const yamlGroupNames = controller === "clash"
-    ? Array.from(text.matchAll(/(?:^|\n)\s*-\s*name\s*:\s*["']?([^"'\r\n]+?)["']?\s*$/gimu)).map((match) => match[1]?.trim()).filter((value): value is string => Boolean(value))
-    : [];
+  // "proxy-groups:" (selectors) and "proxies:" (individual servers) share the same
+  // "- name: x" list-item shape in Clash YAML, so each must be scoped to its own
+  // top-level section - otherwise every server name leaks into the group dropdown.
+  const yamlGroupNames = controller === "clash" ? yamlListItemNames(extractYamlSection(text, "proxy-groups")) : [];
+  const yamlNodeNames = controller === "clash" ? yamlListItemNames(extractYamlSection(text, "proxies")) : [];
   const jsonGroupNames = json && Array.isArray(json["proxy-groups"])
     ? json["proxy-groups"].flatMap((value) => isRecord(value) && typeof value.name === "string" ? [value.name.trim()] : [])
     : [];
+  const jsonNodeNames = json && Array.isArray(json.proxies)
+    ? json.proxies.flatMap((value) => isRecord(value) && typeof value.name === "string" ? [value.name.trim()] : [])
+    : [];
   const proxyGroups = Array.from(new Set([...yamlGroupNames, ...jsonGroupNames].filter(Boolean)));
+  const availableNodes = Array.from(new Set([...yamlNodeNames, ...jsonNodeNames].filter(Boolean)));
   const defaultGroup = scalar(controller === "sing-box" ? ["experimental.clash_api.default_mode", "proxy-group", "selector"] : ["proxy-group", "proxy_group"]);
   const proxyGroup = defaultGroup ?? proxyGroups[0];
   const normalizedAddress = address?.replace(/^https?:\/\//iu, "").replace(/^\/\//, "");
-  const addressMatch = normalizedAddress?.match(/^([^:]+):(\d+)$/);
-  if (!addressMatch) throw new Error("未找到有效的 Clash API external-controller；请确认导入的是控制器配置。");
+  // Accept both "host:port" and IPv6 bracket notation "[::1]:port".
+  const addressMatch = normalizedAddress?.match(/^\[([^\]]+)\]:(\d+)$/) ?? normalizedAddress?.match(/^([^:]+):(\d+)$/);
+  if (!addressMatch) throw new Error(address ? `未能识别 external-controller 的地址格式：“${address}”；请确认格式为 host:port。` : "未找到有效的 Clash API external-controller；请确认导入的是控制器配置。");
   if (!proxyGroup) throw new Error("未找到代理组/selector 名称，请在界面中手动填写后保存。");
-  return { host: addressMatch[1], port: Number(addressMatch[2]), ...(secret ? { secret } : {}), proxyGroup, proxyGroups: proxyGroups.length > 0 ? proxyGroups : [proxyGroup] };
+  return { host: addressMatch[1], port: Number(addressMatch[2]), ...(secret ? { secret } : {}), proxyGroup, proxyGroups: proxyGroups.length > 0 ? proxyGroups : [proxyGroup], availableNodes };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

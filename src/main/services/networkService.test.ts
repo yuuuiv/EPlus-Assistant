@@ -39,6 +39,14 @@ describe("NetworkService", () => {
     await expect(service.acquireLease({ accountId: "account-a", runId: "run-a", contextId: "context-a" })).resolves.toBe("manual-takeover");
   });
 
+  it("exposes the specific reason behind the most recent manual-takeover", async () => {
+    const service = serviceWith(providerWith("203.0.113.8", "United States"));
+
+    await service.acquireLease({ accountId: "account-a", runId: "run-a", contextId: "context-a" });
+
+    expect(service.lastFailureReason()).toBe("Network country policy rejected");
+  });
+
   it("validateLease rejects expired leases", async () => {
     const service = serviceWith(providerWith("203.0.113.8"));
     const lease = await requiredLease(service);
@@ -91,6 +99,39 @@ describe("NetworkService", () => {
     expect(quarantineContext).toHaveBeenCalledWith("context-a", "changed-ip");
   });
 
+  it("direct controller mode acquires a lease with no proxy config, host, port, or secret required", async () => {
+    const provider = providerWith("203.0.113.8");
+    const service = new NetworkService(provider, {
+      getSetting: (key) => key === "network" ? { controller: "direct", host: "", port: 0, proxyGroup: "", requiredCountry: "Japan", policy: "JP-only", secretConfigured: false } : undefined
+    });
+
+    const lease = await service.acquireLease({ accountId: "account-a", runId: "run-a", contextId: "context-a" });
+
+    expect(lease).toMatchObject({ accountId: "account-a", runId: "run-a", contextId: "context-a", country: "Japan", policy: "JP-only" });
+    expect(provider.rotate).toHaveBeenCalledOnce();
+  });
+
+  it("direct controller mode allows every account to reuse the machine's one real IP without being rejected", async () => {
+    const provider = providerWith("203.0.113.8");
+    const service = new NetworkService(provider, {
+      getSetting: (key) => key === "network" ? { controller: "direct", host: "", port: 0, proxyGroup: "", requiredCountry: "Japan", policy: "JP-only", secretConfigured: false } : undefined
+    });
+    await service.acquireLease({ accountId: "account-a", runId: "run-a", contextId: "context-a" });
+
+    const second = await service.acquireLease({ accountId: "account-b", runId: "run-b", contextId: "context-b" });
+
+    expect(second).toMatchObject({ accountId: "account-b", runId: "run-b" });
+  });
+
+  it("direct controller mode still falls back to manual-takeover when the country doesn't match", async () => {
+    const provider = providerWith("203.0.113.8", "United States");
+    const service = new NetworkService(provider, {
+      getSetting: (key) => key === "network" ? { controller: "direct", host: "", port: 0, proxyGroup: "", requiredCountry: "Japan", policy: "JP-only", secretConfigured: false } : undefined
+    });
+
+    await expect(service.acquireLease({ accountId: "account-a", runId: "run-a", contextId: "context-a" })).resolves.toBe("manual-takeover");
+  });
+
   it("audit entry has masked IP", async () => {
     const audit = vi.fn();
     const service = serviceWith(providerWith("203.0.113.8"), { audit });
@@ -104,7 +145,7 @@ describe("NetworkService", () => {
 
 function serviceWith(provider: TestProvider, hooks: { readonly audit?: ReturnType<typeof vi.fn>; readonly quarantineContext?: ReturnType<typeof vi.fn>; readonly launchBrowser?: ReturnType<typeof vi.fn> } = {}): NetworkService {
   return new NetworkService(provider, {
-    getSetting: (key) => key === "network" ? { host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true } : undefined
+    getSetting: (key) => key === "network" ? { controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true } : undefined
   }, hooks);
 }
 

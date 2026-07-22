@@ -6,6 +6,7 @@ const NETWORK_SETTING_KEY = "network";
 const LEASE_TTL_MS = 30 * 60_000;
 
 export interface NetworkSettings {
+  readonly controller: "clash" | "sing-box" | "direct";
   readonly host: string;
   readonly port: number;
   readonly proxyGroup: string;
@@ -28,6 +29,7 @@ export interface NetworkHooks {
 export class NetworkService {
   private generation = 0;
   private readonly fingerprintsByAccount = new Map<string, string>();
+  private lastManualTakeoverReason: string | undefined;
 
   constructor(
     private readonly provider: NetworkRotationProvider,
@@ -44,7 +46,10 @@ export class NetworkService {
       const identity = await this.provider.detectIp();
       const fingerprint = this.generateFingerprint(identity.ip);
       if (identity.country !== network.requiredCountry) return this.manualTakeover("Network country policy rejected", identity);
-      if ([...this.fingerprintsByAccount.entries()].some(([accountId, existing]) => accountId !== input.accountId && existing === fingerprint)) {
+      // In direct mode every account shares the machine's one real IP by definition, so the
+      // cross-account identity-reuse guard (meant to catch proxy rotation failing to actually
+      // rotate) would otherwise reject every account after the first.
+      if (network.controller !== "direct" && [...this.fingerprintsByAccount.entries()].some(([accountId, existing]) => accountId !== input.accountId && existing === fingerprint)) {
         return this.manualTakeover("Network identity reuse rejected", identity);
       }
       this.generation += 1;
@@ -83,7 +88,13 @@ export class NetworkService {
     return createHash("sha256").update(ip).digest("hex");
   }
 
+  /** The specific reason the most recent acquireLease() call fell back to manual takeover, if any. */
+  lastFailureReason(): string | undefined {
+    return this.lastManualTakeoverReason;
+  }
+
   private manualTakeover(message: string, identity?: IpInfo): "manual-takeover" {
+    this.lastManualTakeoverReason = message;
     this.audit("warn", "network.manual-takeover", identity, { reason: message });
     return "manual-takeover";
   }
@@ -100,10 +111,24 @@ export class NetworkService {
 }
 
 function isConfigured(settings: NetworkSettings): boolean {
+  if (settings.controller === "direct") return Boolean(settings.requiredCountry.trim() && settings.policy.trim());
   return Boolean(settings.host.trim() && settings.port > 0 && settings.proxyGroup.trim() && settings.secretConfigured && settings.requiredCountry.trim() && settings.policy.trim());
 }
 
 function maskIp(ip: string): string {
   const [first, second] = ip.split(".");
   return `${first ?? "x"}.${second ?? "x"}.xxx.xxx`;
+}
+
+const NETWORK_FAILURE_REASON_LABELS: Record<string, string> = {
+  "Network configuration is missing": "网络设置尚未保存或缺少必填项（主机、端口、代理组或密钥），请前往网络设置重新保存。",
+  "Network country policy rejected": "出口 IP 所在国家/地区与网络设置中“要求国家”不一致。",
+  "Network identity reuse rejected": "该出口 IP 指纹已被同一批次中的另一账号占用，代理未能轮换到新出口。",
+  "Network rotation or detection failed": "代理轮换或出口 IP 检测失败，请检查控制器（Clash/sing-box）是否在运行。"
+};
+
+/** Surfaces acquireLease()'s specific rejection reason instead of one generic sentence for every cause. */
+export function translateNetworkFailureReason(reason: string | undefined): string {
+  if (!reason) return "Network lease requires manual takeover.";
+  return NETWORK_FAILURE_REASON_LABELS[reason] ?? reason;
 }

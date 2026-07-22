@@ -33,7 +33,7 @@ export type PaymentRunState =
   | "Submitting"
   | "UnknownSubmissionState";
 
-export type DeviceProfileKey = "desktop-chrome" | "iphone-13" | "pixel-7";
+export type DeviceProfileKey = "desktop-chrome" | "desktop-edge" | "iphone-13" | "iphone-15" | "iphone-se" | "pixel-7" | "pixel-8" | "galaxy-s24" | "ipad-gen7";
 
 export interface SelectorEvidence {
   scope: "document";
@@ -181,13 +181,19 @@ export interface EplusApplicationLink {
   selectorHint?: string;
 }
 
+/** A selectable application day/entry, labeled with the site's own text (e.g. "<DAY1>シリアル先行") rather than a generic translation. */
+export interface AvailableDayOption {
+  day: "day1" | "day2";
+  label: string;
+}
+
 export interface SerialCodeRequirement {
   required: boolean;
   label: string;
   placeholder?: string;
   errorSelectors: string[];
   knownErrorMessages: Array<{ code: "InvalidCode" | "UsedCode"; text: string }>;
-  availableDays?: Array<"day1" | "day2">;
+  availableDays?: AvailableDayOption[];
   daySelectionRequired?: boolean;
 }
 
@@ -304,7 +310,7 @@ export interface NetworkLease {
 }
 
 export interface NetworkSettings {
-  controller: "clash" | "sing-box";
+  controller: "clash" | "sing-box" | "direct";
   host: string;
   port: number;
   proxyGroup: string;
@@ -312,11 +318,13 @@ export interface NetworkSettings {
   policy: string;
   secretConfigured: boolean;
   proxyGroups?: string[];
+  /** Hand-picked node subset per proxy group, keyed by group name; empty/absent for a group means use every member. Lets the user save several groups and switch between them without re-picking nodes each time. */
+  nodeSelectionsByGroup?: Record<string, string[]>;
   updatedAt?: string;
 }
 
 export interface NetworkSettingsUpdate {
-  controller: "clash" | "sing-box";
+  controller: "clash" | "sing-box" | "direct";
   host: string;
   port: number;
   secret?: string;
@@ -324,6 +332,12 @@ export interface NetworkSettingsUpdate {
   requiredCountry: string;
   policy: string;
   proxyGroups?: string[];
+  nodeSelectionsByGroup?: Record<string, string[]>;
+}
+
+export interface NetworkImportResult extends NetworkSettingsUpdate {
+  /** Every individual proxy server name found in the imported config, for the user to pick a rotation subset from. */
+  availableNodes: string[];
 }
 
 export interface NetworkNode {

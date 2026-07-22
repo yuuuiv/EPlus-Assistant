@@ -75,6 +75,12 @@ describe("Eplus page parser", () => {
     expect(parsed.rawFormSchema.sourceKind).toBe("serial-code");
     expect(parsed.rawFormSchema.selectorHints.serialInput).toContain("input[name^='ninsho_key']");
     expect(parsed.rawFormSchema.selectorHints.codeSubmitButton).toContain("value='moushikomi'");
+    // A direct serial-code entry page has no separate "お申込み" link to click into —
+    // the page itself is the entry, so zero applicationLinks is expected here, not a
+    // parsing failure that should block task creation or warn about a missing entry.
+    expect(parsed.rawFormSchema.applicationLinks).toHaveLength(0);
+    expect(parsed.rawFormSchema.requiresManualInspection).toBe(false);
+    expect(parsed.rawFormSchema.notes.some((note) => note.includes("未发现可点击的申込み入口"))).toBe(false);
   });
 
   it("preserves delivery and payment runtime groups as static hints without label inference", async () => {

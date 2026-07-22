@@ -83,6 +83,14 @@ describe("BrowserSessionEngine", () => {
     await engine.close();
   });
 
+  it("sizes the headed OS window to match the emulated device instead of a default desktop window", async () => {
+    const { engine } = await engineFixture();
+    await engine.startSession("account-1", { taskId: "task-1", runId: "run-1", deviceProfileKey: "iphone-13" });
+    const options = launchPersistentContext.mock.calls[0][1] as { readonly args?: readonly string[] };
+    expect(options.args).toEqual(["--window-size=390,844"]);
+    await engine.close();
+  });
+
   it("rejects an invalid executable without a launch attempt", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "eplus-browser-engine-"));
     directories.push(directory);
@@ -100,7 +108,7 @@ describe("BrowserSessionEngine", () => {
     const { config, artifacts } = await engineFixture();
     const network = new NetworkService(
       { rotate: vi.fn().mockRejectedValue(new Error("controller unavailable")), detectIp: vi.fn() },
-      { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+      { getSetting: () => ({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
     );
     const engine = new BrowserSessionEngine(config, artifacts, network);
 
@@ -110,9 +118,33 @@ describe("BrowserSessionEngine", () => {
     expect(engine.isSessionActive()).toBe(false);
   });
 
+  it("does not carry a stale quarantine flag into the next session after a lease failure that never opened a context", async () => {
+    const { config, artifacts } = await engineFixture();
+    let leaseAttempt = 0;
+    const network = new NetworkService(
+      {
+        rotate: vi.fn().mockResolvedValue(undefined),
+        detectIp: vi.fn(async () => { leaseAttempt += 1; return leaseAttempt === 1 ? { ip: "1.2.3.4", country: "United States", region: "NY" } : { ip: "5.6.7.8", country: "Japan", region: "Tokyo" }; })
+      },
+      { getSetting: () => ({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+    );
+    const engine = new BrowserSessionEngine(config, artifacts, network);
+
+    // First attempt: network lease is rejected (wrong country) before any browser opens.
+    await expect(engine.startNetworkSession({ accountId: "account-1", runId: "run-1", contextId: "context-1" })).resolves.toBe(false);
+    expect(engine.isSessionActive()).toBe(false);
+
+    // Second attempt (e.g. a profile refresh retried after fixing network settings): the lease
+    // now succeeds and a fresh browser opens. It must not immediately trip over a leftover
+    // quarantine flag from the earlier, context-less failure.
+    await engine.startSession("account-1", { taskId: "task-1", runId: "run-1" });
+    await expect(engine.navigate("https://eplus.jp/mypage")).resolves.toBe("https://eplus.jp/mypage");
+    await engine.close();
+  });
+
   it("fences startup before page ownership and closes a raced context", async () => {
     const { config, artifacts } = await engineFixture();
-    const network = new NetworkService({ rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) }, { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) });
+    const network = new NetworkService({ rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) }, { getSetting: () => ({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) });
     const engine = new BrowserSessionEngine(config, artifacts, network);
     let calls = 0;
     const launchGuard = vi.fn(() => { calls += 1; if (calls === 3) throw new Error("fenced"); });
@@ -124,7 +156,7 @@ describe("BrowserSessionEngine", () => {
     const { config, artifacts } = await engineFixture();
     const network = new NetworkService(
       { rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) },
-      { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+      { getSetting: () => ({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
     );
     const engine = new BrowserSessionEngine(config, artifacts, network);
 
@@ -138,7 +170,7 @@ describe("BrowserSessionEngine", () => {
     const { config, artifacts } = await engineFixture();
     const network = new NetworkService(
       { rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) },
-      { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+      { getSetting: () => ({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
     );
     const engine = new BrowserSessionEngine(config, artifacts, network);
 

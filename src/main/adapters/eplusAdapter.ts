@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
-import type { ApplicationRecord, CreditCardSummary, EventOption, LotteryPreference, LotteryResultRecord, PaymentOptionGroup, RuntimePaymentOption, SelectorEvidence } from "../../shared/types.js";
+import type { ApplicationRecord, CreditCardSummary, EventOption, LotteryResultRecord, PaymentOptionGroup, PaymentSelection, RuntimePaymentOption, SelectorEvidence } from "../../shared/types.js";
 import { BrowserEngineFailure, BrowserSessionEngine } from "../engines/browserSessionEngine.js";
-import type { PageState } from "../engines/pageStateClassifier.js";
+import { defaultSelectorHints, type PageState } from "../engines/pageStateClassifier.js";
 import { discoverRuntimePaymentOptions } from "../services/runtimePaymentDiscovery.js";
 import {
   parseApplicationRecords,
@@ -44,6 +44,15 @@ const SERIAL_CODE_SUBMIT_SELECTOR = "button[name='action'][value='moushikomi'], 
 const CARD_FIELD_SELECTOR = "input[autocomplete='cc-number'], input[autocomplete='cc-csc'], input[name*='card'], input[name*='cvv'], input[name*='expiry']";
 const SUPPORTED_PAYMENT_VALUE_SEGMENTS = ["card", "convenience", "familymart", "seven", "pay-easy", "atm", "bank"] as const;
 const APPROVED_SUBMIT_SELECTOR = "#apply-button-area a";
+const CONSENT_CHECKBOX_SELECTOR = "input[type='checkbox']";
+const { cautionNextButton: CAUTION_NEXT_SELECTOR, finalConsentButton: FINAL_CONSENT_SELECTOR } = defaultSelectorHints();
+
+interface ConsentControlSnapshot {
+  readonly label: string;
+  readonly checked: boolean;
+  readonly id: string | null;
+  readonly name: string | null;
+}
 
 export type PaymentDiscoveryResult =
   | { readonly status: "ready"; readonly groups: readonly PaymentOptionGroup[] }
@@ -196,27 +205,73 @@ export class EplusBrowserAdapter {
     };
   }
 
-  async applyPreference(preference: LotteryPreference): Promise<void> {
+  /**
+   * Re-applies every verified runtime selection for this run (ticket, quantity, entry,
+   * delivery, payment — whatever data-payment-group controls the page declares), each
+   * bound to its group by (groupKey, domValue) rather than a fixed set of known fields.
+   */
+  async applyPreference(selections: readonly PaymentSelection[]): Promise<void> {
     const state = await this.requireAutomatableState();
     if (state !== "LotteryForm" && state !== "DaySelection") {
       throw new BrowserEngineFailure("ProhibitedAction", `Preferences cannot be applied while the page is ${state}.`);
     }
-    if (preference.entries.length > 0) {
-      throw new BrowserEngineFailure("ManualTakeoverRequired", "Ticket controls require explicit runtime evidence.");
-    }
-    const paymentValue = preference.paymentPreference?.groupKey === "payment" ? preference.paymentPreference.value : preference.paymentMethodId;
-    if (!paymentValue || (preference.paymentPreference && preference.paymentPreference.groupKey !== "payment")) {
-      throw new BrowserEngineFailure("ManualTakeoverRequired", "Payment selection requires an exact payment-group candidate.");
+    if (selections.length === 0) {
+      throw new BrowserEngineFailure("ManualTakeoverRequired", "No verified runtime selection is available to apply.");
     }
     const inspection = await this.inspectDeclaredPaymentGroups();
     if (inspection.unsafePaymentFields) {
       throw new BrowserEngineFailure("ManualTakeoverRequired", "Card payment details require manual entry.");
     }
-    const candidates = exactPreferenceCandidates(inspection.groups, preference.deliveryMethodId, paymentValue);
+    const candidates = exactPreferenceCandidates(inspection.groups, selections);
     if (candidates.status !== "selected") {
-      throw new BrowserEngineFailure("ManualTakeoverRequired", "Payment control is missing, disabled, unsupported, or ambiguous.");
+      throw new BrowserEngineFailure("ManualTakeoverRequired", "A verified runtime control is missing, disabled, unsupported, ambiguous, or changed.");
     }
     await this.selectCandidates(candidates.candidates);
+  }
+
+  /** Clicks through a deterministic, already-verified interstitial notice (e.g. "必ずお読みください" / "同意して申込み"). */
+  async acknowledgeInterstitial(): Promise<void> {
+    const state = await this.requireAutomatableState();
+    if (state !== "InterstitialConsent") {
+      throw new BrowserEngineFailure("ProhibitedAction", `Interstitial acknowledgement is not permitted while the page is ${state}.`);
+    }
+    await this.engine.executeStep("acknowledge-interstitial", {
+      execute: async (page) => {
+        const button = page.locator(`${CAUTION_NEXT_SELECTOR}, ${FINAL_CONSENT_SELECTOR}`);
+        const count = await button.count();
+        if (count === 0) throw new BrowserEngineFailure("SelectorNotFound", "No verified interstitial acknowledgement control found on the page.");
+        if (count > 1) throw new BrowserEngineFailure("ProhibitedAction", "Multiple interstitial acknowledgement controls found; ambiguous automation is prohibited.");
+        await button.first().click();
+      }
+    });
+  }
+
+  /** Enumerates unchecked terms/consent checkboxes on a CheckboxGate page for candidate-matching, mirroring payment-group discovery. */
+  async discoverConsentControls(): Promise<PaymentOptionGroup[]> {
+    const state = await this.requireAutomatableState();
+    if (state !== "CheckboxGate") {
+      throw new BrowserEngineFailure("ProhibitedAction", `Consent controls cannot be read while the page is ${state}.`);
+    }
+    const controls = await this.inspectConsentControls();
+    return controls
+      .filter((control) => !control.checked && control.label.trim().length > 0)
+      .map((control, index) => consentGroup(control, index));
+  }
+
+  /** Checks the consent boxes matched by a previously discovered/templated selection, re-verifying each is still unchecked before acting. */
+  async applyConsentSelections(candidateIds: readonly string[]): Promise<void> {
+    const groups = await this.discoverConsentControls();
+    const candidates = candidateIds.map((candidateId) => groups.flatMap((group) => group.options).find((option) => option.candidateId === candidateId));
+    if (candidates.some((candidate) => candidate === undefined)) {
+      throw new BrowserEngineFailure("ManualTakeoverRequired", "A verified consent control is missing or changed.");
+    }
+    await this.checkConsentBoxes(candidates.filter((candidate): candidate is RuntimePaymentOption => candidate !== undefined));
+  }
+
+  /** Best-effort: after a human manually resolves a CheckboxGate, confirms which candidate labels are now checked, for template capture. */
+  async confirmConsentChecked(candidates: readonly { groupKey: string; domValue: string; label: string }[]): Promise<readonly { groupKey: string; domValue: string; label: string }[]> {
+    const controls = await this.inspectConsentControls();
+    return candidates.filter((candidate) => controls.some((control) => control.checked && normalizeLabel(control.label) === normalizeLabel(candidate.label)));
   }
 
   async readReviewPage(): Promise<ReviewPageData> {
@@ -366,6 +421,39 @@ export class EplusBrowserAdapter {
     });
   }
 
+  private async inspectConsentControls(): Promise<ConsentControlSnapshot[]> {
+    return this.engine.inspectPage({
+      inspect: async (page) =>
+        page.evaluate(() => {
+          const boxes = Array.from(document.querySelectorAll<HTMLInputElement>("input[type='checkbox']"));
+          return boxes.map((box) => {
+            const label = box.id
+              ? document.querySelector(`label[for="${CSS.escape(box.id)}"]`)?.textContent?.trim()
+              : box.closest("label")?.textContent?.trim();
+            return { label: label ?? "", checked: box.checked, id: box.id || null, name: box.getAttribute("name") };
+          });
+        })
+    });
+  }
+
+  private async checkConsentBoxes(candidates: readonly RuntimePaymentOption[]): Promise<void> {
+    await this.engine.executeStep("check-consent-boxes", {
+      execute: async (page) => {
+        const boxes = page.locator(CONSENT_CHECKBOX_SELECTOR);
+        for (const candidate of candidates) {
+          const box = boxes.nth(candidate.groupOrder);
+          if ((await box.count()) !== 1 || (await box.isChecked())) {
+            throw new BrowserEngineFailure("ManualTakeoverRequired", "Consent checkbox is missing or already in an unexpected state.");
+          }
+          await box.check();
+          if (!(await box.isChecked())) {
+            throw new BrowserEngineFailure("ManualTakeoverRequired", "Consent checkbox could not be confirmed checked.");
+          }
+        }
+      }
+    });
+  }
+
   private async selectCandidates(candidates: readonly RuntimePaymentOption[]): Promise<void> {
     await this.engine.executeStep("select-runtime-payment-candidates", {
       execute: async (page) => {
@@ -501,11 +589,39 @@ function candidateId(groupKey: string, domValue: string, optionOrder: number, va
 }
 
 function paymentDiscoveryFromGroups(groups: readonly PaymentOptionGroup[]): PaymentDiscoveryResult {
-  const paymentGroups = groups.filter((group) => group.groupKey === "payment");
-  if (paymentGroups.length === 0) return { status: "payment_unavailable", groups: [] };
-  if (paymentGroups.some((group) => group.options.length === 0)) return { status: "manual", groups: paymentGroups, reason: "unsupported-control" };
-  if (paymentGroups.some((group) => group.options.some((option) => option.ambiguous))) return { status: "manual", groups: paymentGroups, reason: "ambiguous-control" };
-  return { status: "ready", groups: paymentGroups };
+  if (groups.length === 0) return { status: "payment_unavailable", groups: [] };
+  if (groups.some((group) => group.options.length === 0)) return { status: "manual", groups, reason: "unsupported-control" };
+  if (groups.some((group) => group.options.some((option) => option.ambiguous))) return { status: "manual", groups, reason: "ambiguous-control" };
+  return { status: "ready", groups };
+}
+
+function consentGroup(control: ConsentControlSnapshot, index: number): PaymentOptionGroup {
+  const groupKey = `consent-${index}`;
+  const domValue = normalizeLabel(control.label);
+  const selectorEvidence: SelectorEvidence = {
+    scope: "document",
+    tag: "input",
+    groupOrdinal: index,
+    optionOrdinal: 0,
+    allowedAttributes: {
+      ...(control.id && !/^i\d+$/iu.test(control.id) ? { id: control.id } : {}),
+      ...(control.name ? { name: control.name } : {}),
+      type: "checkbox",
+      dataPaymentGroup: groupKey
+    },
+    contextGeneration: "live"
+  };
+  return {
+    groupKey,
+    groupOrder: index,
+    controlType: "input",
+    selectorEvidence,
+    options: [{ candidateId: `${groupKey}:${domValue}`, groupKey, groupOrder: index, optionOrder: 0, controlType: "input", domValue, label: control.label, enabled: true, supported: true, ambiguous: false, selectorEvidence }]
+  };
+}
+
+function normalizeLabel(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 function selectedCandidates(groups: readonly PaymentOptionGroup[], candidateIds: readonly string[]):
@@ -521,9 +637,14 @@ function selectedCandidates(groups: readonly PaymentOptionGroup[], candidateIds:
   return { status: "selected", candidates: [...resolved].sort((left, right) => left.groupOrder - right.groupOrder || left.optionOrder - right.optionOrder) };
 }
 
-function exactPreferenceCandidates(groups: readonly PaymentOptionGroup[], deliveryValue: string | undefined, paymentValue: string) {
-  const candidateIds = groups
-    .filter((group) => group.groupKey === "delivery" || group.groupKey === "payment")
-    .flatMap((group) => group.options.filter((option) => option.domValue === (group.groupKey === "delivery" ? deliveryValue : paymentValue)).map((option) => option.candidateId));
+function exactPreferenceCandidates(groups: readonly PaymentOptionGroup[], selections: readonly PaymentSelection[]) {
+  const candidateIds: string[] = [];
+  for (const selection of selections) {
+    const group = groups.find((candidate) => candidate.groupKey === selection.groupKey);
+    const matches = group?.options.filter((option) => option.domValue === selection.domValue) ?? [];
+    if (matches.length !== 1) return { status: "manual" as const, reason: "missing-candidate" as const, groups };
+    const match = matches[0];
+    if (match) candidateIds.push(match.candidateId);
+  }
   return selectedCandidates(groups, candidateIds);
 }

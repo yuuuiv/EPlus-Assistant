@@ -1,8 +1,10 @@
-import { AlertTriangle, CheckCircle2, CirclePause, Play, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CirclePause, Play, RefreshCw, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useState } from "react";
 import type { Account, AccountRun, DashboardState, PaymentSelectionInput } from "../../shared/ipc.js";
-import type { LotteryTask, PaymentDiscoveryCheckpoint, PaymentOptionGroup, RuntimePaymentOption } from "../../shared/types.js";
+import { isSelectableOption, selectableCandidateGroups } from "../../shared/paymentOptions.js";
+import type { LotteryTask, PaymentDiscoveryCheckpoint, RuntimePaymentOption } from "../../shared/types.js";
 import { ProgressBar, type ProgressTone } from "./ProgressBar.js";
+export { isSelectableOption, selectableCandidateGroups } from "../../shared/paymentOptions.js";
 import { deviceProfileLabel } from "./TaskCreation.js";
 
 const statusText: Record<string, string> = { Pending: "待处理", Queued: "已排队", LoggingIn: "正在登录", FillingForm: "正在填写", AwaitingConfirmation: "等待确认", AwaitingEmailCode: "等待验证码", AwaitingCompletionEmail: "等待申请完成邮件", AwaitingManualAction: "等待人工接管", UnknownSubmissionState: "提交状态未知", AwaitingSubmitConfirmation: "等待最终确认", Submitting: "正在提交", Running: "运行中", Paused: "已暂停", Submitted: "已提交", Completed: "已完成", Failed: "失败", Cancelled: "已取消" };
@@ -43,14 +45,6 @@ export function runControlMode(run: AccountRun): RunControlMode {
   return "none";
 }
 
-export function selectableCandidateGroups(checkpoint: PaymentDiscoveryCheckpoint): PaymentOptionGroup[] {
-  return checkpoint.groups.filter((group) => group.options.some(isSelectableOption));
-}
-
-export function isSelectableOption(option: RuntimePaymentOption): boolean {
-  return option.enabled && option.supported && !option.ambiguous;
-}
-
 export function paymentSelectionPayload(checkpoint: PaymentDiscoveryCheckpoint, choicesByGroup: Record<string, string>): PaymentSelectionInput {
   const candidateIds = selectableCandidateGroups(checkpoint)
     .map((group) => choicesByGroup[group.groupKey])
@@ -78,12 +72,14 @@ interface TaskMonitorProps {
   readonly onPause: () => void;
   readonly onResume: () => void;
   readonly onCancelTask: (taskId: string) => void;
+  readonly onDeleteTask: (taskId: string) => void;
   readonly onCancelRun: (runId: string) => void;
   readonly onManualAction: (run: AccountRun, action: "continue" | "cancel-account" | "cancel-task" | "reconcile-unknown", verificationCode?: string) => void;
   readonly onSelectPayment: (input: PaymentSelectionInput) => void;
   readonly onConfirmSubmit: (taskId: string, runId: string) => void;
   readonly onAwaitCompletionEmail: (runId: string) => void;
   readonly onRetryEmailCode: (runId: string) => void;
+  readonly onOpenNetworkSettings: () => void;
 }
 
 function StatusBadge({ status }: { readonly status: string }) {
@@ -134,9 +130,13 @@ function PaymentSelectionCard(props: { readonly run: AccountRun; readonly task: 
   );
 }
 
-function ManualTakeoverCard(props: { readonly run: AccountRun; readonly accountName: string; readonly onManualAction: TaskMonitorProps["onManualAction"]; readonly onCancelRun: (runId: string) => void; readonly onCancelTask: (taskId: string) => void }) {
+function ManualTakeoverCard(props: { readonly run: AccountRun; readonly accountName: string; readonly onManualAction: TaskMonitorProps["onManualAction"]; readonly onCancelRun: (runId: string) => void; readonly onCancelTask: (taskId: string) => void; readonly onOpenNetworkSettings: () => void }) {
   const [verificationCode, setVerificationCode] = useState("");
   const needsCode = props.run.status === "AwaitingEmailCode";
+  const isNetworkIssue = props.run.resumeCheckpoint?.manualReason === "network";
+  if (isNetworkIssue) {
+    return <article className="takeover-row"><div><strong>{props.accountName}</strong><span>网络未通过校验，浏览器未打开</span><p>{props.run.errorDetailRedacted || "网络控制器（代理）未能验证出口地区，程序不会在未校验网络下打开浏览器以避免账号真实 IP 暴露。请检查网络设置后重试。"}</p></div><div className="row-actions"><button type="button" className="icon-button" onClick={props.onOpenNetworkSettings}><ShieldCheck size={15} />前往网络设置</button><button type="button" className="primary" onClick={() => props.onManualAction(props.run, "continue")}><Play size={15} />重试</button><button type="button" className="icon-button danger" onClick={() => props.onCancelRun(props.run.id)}><XCircle size={15} />取消运行</button><button type="button" className="icon-button danger" onClick={() => props.onCancelTask(props.run.taskId)}><AlertTriangle size={15} />取消任务</button></div></article>;
+  }
   return <article className="takeover-row"><div><strong>{props.accountName}</strong><span>{needsCode ? "验证码已发送，浏览器窗口保持打开" : "需要在真实浏览器中人工处理"}</span><p>{props.run.errorDetailRedacted || "请在已自动打开的浏览器中完成验证码、滑块或设备验证。完成后回到这里继续。"}</p>{needsCode ? <label>验证码<input inputMode="numeric" autoComplete="one-time-code" value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} placeholder="输入 4–8 位验证码" /></label> : null}</div><div className="row-actions"><button type="button" className="primary" disabled={needsCode && verificationCode.trim().length < 4} onClick={() => props.onManualAction(props.run, "continue", verificationCode)}><Play size={15} />{needsCode ? "填入验证码并继续" : "已处理，继续"}</button><button type="button" className="icon-button danger" onClick={() => props.onCancelRun(props.run.id)}><XCircle size={15} />取消运行</button><button type="button" className="icon-button danger" onClick={() => props.onCancelTask(props.run.taskId)}><AlertTriangle size={15} />取消任务</button></div></article>;
 }
 
@@ -169,7 +169,7 @@ function DecisionCenter(props: TaskMonitorProps) {
           </article>
         ))}
         {completionRuns.map((run) => <article key={run.id} className="takeover-row"><div><strong>{accountName(run.accountId)}</strong><span>已提交，等待严格匹配的申请完成邮件</span><p>{run.errorDetailRedacted || "只接受当前账号转发来源、发件人 info@eplus.co.jp 且正文符合申请完成模板的邮件。"}</p></div><div className="row-actions"><button type="button" className="primary" onClick={() => props.onAwaitCompletionEmail(run.id)}><Play size={15} />继续等待邮件</button><button type="button" className="icon-button danger" onClick={() => props.onCancelRun(run.id)}><XCircle size={15} />取消运行</button></div></article>)}
-        {manualRuns.map((run) => <ManualTakeoverCard key={run.id} run={run} accountName={accountName(run.accountId)} onManualAction={props.onManualAction} onCancelRun={props.onCancelRun} onCancelTask={props.onCancelTask} />)}
+        {manualRuns.map((run) => <ManualTakeoverCard key={run.id} run={run} accountName={accountName(run.accountId)} onManualAction={props.onManualAction} onCancelRun={props.onCancelRun} onCancelTask={props.onCancelTask} onOpenNetworkSettings={props.onOpenNetworkSettings} />)}
         {unknownRuns.map((run) => (
           <article key={run.id} className="takeover-row">
             <div>
@@ -223,7 +223,9 @@ export function TaskMonitor(props: TaskMonitorProps) {
                   </div>
                   <div className="row-actions">
                     {task.status === "AwaitingConfirmation" ? <button className="icon-button" onClick={() => props.onEnqueue(task.id)}><Play size={15} />加入队列</button> : null}
-                    <button className="icon-button danger" onClick={() => props.onCancelTask(task.id)}><XCircle size={15} />取消任务</button>
+                    {task.status === "Completed" || task.status === "Failed" || task.status === "Cancelled"
+                      ? <button className="icon-button danger" onClick={() => props.onDeleteTask(task.id)}><Trash2 size={15} />删除任务</button>
+                      : <button className="icon-button danger" onClick={() => props.onCancelTask(task.id)}><XCircle size={15} />取消任务</button>}
                   </div>
                 </div>
                 <ProgressBar value={taskProgress.value} tone={taskProgress.tone} label={`任务完成度 ${taskProgress.value ?? 0}%`} />

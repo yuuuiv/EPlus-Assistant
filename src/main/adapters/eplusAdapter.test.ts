@@ -5,7 +5,7 @@ import type { PaymentOptionGroup } from "../../shared/types.js";
 import { EplusBrowserAdapter, parseOptions } from "./eplusAdapter.js";
 import { BrowserSessionEngine } from "../engines/browserSessionEngine.js";
 
-function engineFixture(state: "Login" | "SerialCode" | "LotteryForm" | "Receipt" = "Login") {
+function engineFixture(state: "Login" | "SerialCode" | "LotteryForm" | "Receipt" | "InterstitialConsent" | "CheckboxGate" = "Login") {
   const engine = Object.create(BrowserSessionEngine.prototype) as BrowserSessionEngine;
   vi.spyOn(engine, "evaluateState").mockResolvedValue({ state, confidence: 1, reason: "fixture", safeActionHints: [], requiresManualTakeover: false });
   vi.spyOn(engine, "executeStep").mockResolvedValue({ beforeState: state, action: "fixture", afterState: state });
@@ -32,12 +32,12 @@ describe("EplusBrowserAdapter", () => {
     expect(delivery?.runtimeGroup).toBeUndefined();
   });
 
-  it("returns payment candidates from the exact declared payment group", async () => {
+  it("returns every declared runtime option group, not just payment", async () => {
     const engine = engineFixture("LotteryForm");
     const adapter = new EplusBrowserAdapter(engine);
     vi.spyOn(engine, "inspectPage").mockResolvedValue({ groups: [deliveryGroup(), paymentGroup()], unsafePaymentFields: false });
 
-    await expect(adapter.discoverPaymentOptions()).resolves.toEqual({ status: "ready", groups: [paymentGroup()] });
+    await expect(adapter.discoverPaymentOptions()).resolves.toEqual({ status: "ready", groups: [deliveryGroup(), paymentGroup()] });
   });
 
   it("selects electronic then convenience candidates in declared group order using exact values", async () => {
@@ -52,7 +52,7 @@ describe("EplusBrowserAdapter", () => {
       return { beforeState: "LotteryForm", action: "fixture", afterState: "LotteryForm" };
     });
 
-    await adapter.applyPreference({ entries: [], deliveryMethodId: "delivery-mobile", paymentPreference: { groupKey: "payment", value: "payment-convenience" }, consentFlags: {} });
+    await adapter.applyPreference([{ groupKey: "delivery", candidateId: "delivery:delivery-mobile", domValue: "delivery-mobile" }, { groupKey: "payment", candidateId: "payment:payment-convenience", domValue: "payment-convenience" }]);
 
     expect(selected).toEqual(["delivery-mobile", "payment-convenience"]);
     expect(page.locator).toHaveBeenCalledWith("[data-payment-group]");
@@ -84,7 +84,7 @@ describe("EplusBrowserAdapter", () => {
 
     await expect(adapter.selectPaymentCandidates(["payment:missing"])).resolves.toMatchObject({ status: "manual", reason: "missing-candidate" });
     await expect(adapter.selectPaymentCandidates(["payment:payment-convenience"])).resolves.toMatchObject({ status: "manual", reason: "disabled-candidate" });
-    await expect(adapter.applyPreference({ entries: [], paymentPreference: { groupKey: "delivery", value: "delivery-mobile" }, consentFlags: {} })).rejects.toThrow("exact payment-group candidate");
+    await expect(adapter.applyPreference([{ groupKey: "delivery", candidateId: "delivery:not-a-real-value", domValue: "not-a-real-value" }])).rejects.toThrow("missing, disabled, unsupported, ambiguous, or changed");
     expect(engine.executeStep).not.toHaveBeenCalledWith("select-runtime-payment-candidates", expect.anything());
   });
 
@@ -138,12 +138,30 @@ describe("EplusBrowserAdapter", () => {
     expect(engine.executeStep).toHaveBeenCalledWith("enter-serial-code", expect.any(Object));
   });
 
-  it("requires manual takeover instead of selecting ticket controls without runtime evidence", async () => {
+  it("requires manual takeover instead of applying preferences with no verified runtime selection", async () => {
     const engine = engineFixture("LotteryForm");
     const adapter = new EplusBrowserAdapter(engine);
 
-    await expect(adapter.applyPreference({ entries: [{ rank: 1, ticketTypeId: "ticket-a", quantity: 1 }], paymentMethodId: "payment-card", consentFlags: {} })).rejects.toThrow("Ticket controls require explicit runtime evidence");
+    await expect(adapter.applyPreference([])).rejects.toThrow("No verified runtime selection is available to apply");
     expect(engine.inspectPage).not.toHaveBeenCalled();
+  });
+
+  it("applies a ticket-type selection the same way as a payment selection, using only the verified group and DOM value", async () => {
+    const engine = engineFixture("LotteryForm");
+    const adapter = new EplusBrowserAdapter(engine);
+    const ticketGroup = group("ticket", 0, "ticket-electronic", true, true);
+    vi.spyOn(engine, "inspectPage").mockResolvedValue({ groups: [ticketGroup], unsafePaymentFields: false });
+    const selected: string[] = [];
+    const page = singleGroupPage("ticket", "ticket-electronic", selected);
+    vi.spyOn(engine, "executeStep").mockImplementation(async (_action, step) => {
+      if (!step) throw new Error("Expected browser step.");
+      await step.execute(page as never);
+      return { beforeState: "LotteryForm", action: "fixture", afterState: "LotteryForm" };
+    });
+
+    await adapter.applyPreference([{ groupKey: "ticket", candidateId: "ticket:ticket-electronic", domValue: "ticket-electronic" }]);
+
+    expect(selected).toEqual(["ticket-electronic"]);
   });
 
   it("rejects submission when no approved submit element is found on the page", async () => {
@@ -194,6 +212,72 @@ describe("EplusBrowserAdapter", () => {
     expect(result).toEqual({ url: "https://eplus.jp/receipt", receiptText: "受付番号: EP12345678" });
   });
 
+  it("clicks the verified interstitial acknowledgement control", async () => {
+    const engine = engineFixture("InterstitialConsent");
+    const adapter = new EplusBrowserAdapter(engine);
+    const click = vi.fn(async () => undefined);
+    const page = { locator: vi.fn(() => ({ count: vi.fn(async () => 1), first: vi.fn(() => ({ click })) })) };
+    vi.spyOn(engine, "executeStep").mockImplementation(async (_action, step) => {
+      if (!step) throw new Error("Expected browser step.");
+      await step.execute(page as never);
+      return { beforeState: "InterstitialConsent", action: "acknowledge-interstitial", afterState: "LotteryForm" };
+    });
+
+    await adapter.acknowledgeInterstitial();
+
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("discovers unchecked consent checkboxes as single-option groups keyed by position and label", async () => {
+    const engine = engineFixture("CheckboxGate");
+    const adapter = new EplusBrowserAdapter(engine);
+    vi.spyOn(engine, "inspectPage").mockResolvedValue([
+      { label: "利用規約に同意する", checked: false, id: "terms", name: null },
+      { label: "", checked: false, id: null, name: null },
+      { label: "個人情報の取り扱いに同意する", checked: true, id: "privacy", name: null }
+    ]);
+
+    const groups = await adapter.discoverConsentControls();
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ groupKey: "consent-0", options: [{ candidateId: "consent-0:利用規約に同意する", domValue: "利用規約に同意する", label: "利用規約に同意する" }] });
+  });
+
+  it("checks the matched consent checkbox by its discovered ordinal position", async () => {
+    const engine = engineFixture("CheckboxGate");
+    const adapter = new EplusBrowserAdapter(engine);
+    vi.spyOn(engine, "inspectPage").mockResolvedValue([{ label: "利用規約に同意する", checked: false, id: "terms", name: null }]);
+    const checkedValues: string[] = [];
+    const box = { count: vi.fn(async () => 1), isChecked: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true), check: vi.fn(async () => { checkedValues.push("terms"); }) };
+    const page = { locator: vi.fn(() => ({ nth: vi.fn(() => box) })) };
+    vi.spyOn(engine, "executeStep").mockImplementation(async (_action, step) => {
+      if (!step) throw new Error("Expected browser step.");
+      await step.execute(page as never);
+      return { beforeState: "CheckboxGate", action: "check-consent-boxes", afterState: "CheckboxGate" };
+    });
+
+    await adapter.applyConsentSelections(["consent-0:利用規約に同意する"]);
+
+    expect(checkedValues).toEqual(["terms"]);
+    expect(box.check).toHaveBeenCalledOnce();
+  });
+
+  it("confirms which candidate labels are now checked on the live page, for template capture", async () => {
+    const engine = engineFixture("LotteryForm");
+    const adapter = new EplusBrowserAdapter(engine);
+    vi.spyOn(engine, "inspectPage").mockResolvedValue([
+      { label: "利用規約に同意する", checked: true, id: "terms", name: null },
+      { label: "个人信息", checked: false, id: "privacy", name: null }
+    ]);
+
+    const confirmed = await adapter.confirmConsentChecked([
+      { groupKey: "consent-0", domValue: "利用規約に同意する", label: "利用規約に同意する" },
+      { groupKey: "consent-1", domValue: "个人信息", label: "个人信息" }
+    ]);
+
+    expect(confirmed).toEqual([{ groupKey: "consent-0", domValue: "利用規約に同意する", label: "利用規約に同意する" }]);
+  });
+
   it("validates the lease at the action boundary before clicking submit", async () => {
     const engine = engineFixture("LotteryForm");
     const adapter = new EplusBrowserAdapter(engine);
@@ -237,6 +321,12 @@ function deliveryGroup(): PaymentOptionGroup {
 function group(groupKey: string, groupOrder: number, domValue: string, enabled: boolean, supported: boolean): PaymentOptionGroup {
   const selectorEvidence = { scope: "document" as const, tag: "input" as const, groupOrdinal: groupOrder, optionOrdinal: 0, allowedAttributes: { name: groupKey, type: "radio", dataPaymentGroup: groupKey }, contextGeneration: "live" };
   return { groupKey, groupOrder, controlType: "input", selectorEvidence, options: [{ candidateId: `${groupKey}:${domValue}`, groupKey, groupOrder, optionOrder: 0, controlType: "input", domValue, label: domValue, enabled, supported, ambiguous: false, selectorEvidence }] };
+}
+
+function singleGroupPage(groupKey: string, domValue: string, selected: string[]) {
+  const optionNode = { count: vi.fn(async () => 1), getAttribute: vi.fn(async () => domValue), isDisabled: vi.fn(async () => false), check: vi.fn(async () => { selected.push(domValue); }), isChecked: vi.fn(async () => true), evaluate: vi.fn(async () => domValue) };
+  const groupNode = { getAttribute: vi.fn(async () => groupKey), locator: vi.fn(() => ({ nth: vi.fn(() => optionNode) })) };
+  return { frames: () => [{}], locator: vi.fn((selector: string) => selector === "[data-payment-group]" ? { nth: vi.fn(() => groupNode) } : { count: vi.fn(async () => 0) }) };
 }
 
 function selectionPage(selected: string[]) {

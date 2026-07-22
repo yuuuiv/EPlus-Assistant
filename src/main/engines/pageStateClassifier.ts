@@ -182,7 +182,7 @@ export function classifyPageState(input: ClassifierInput): ClassificationResult 
       0.88,
       "Matched unchecked terms or conditions checkbox gate.",
       CHECKBOX_GATE_ACTION_HINTS,
-      true
+      false
     );
   }
 

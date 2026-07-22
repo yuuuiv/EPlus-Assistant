@@ -25,4 +25,3 @@ exports_*
 .vite/
 .DS_Store
 Thumbs.db
-tests/

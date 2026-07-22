@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClashControllerProvider } from "./networkRotationProvider.js";
+import { ClashControllerProvider, DirectNetworkRotationProvider, type NetworkRotationProvider } from "./networkRotationProvider.js";
 
 describe("ClashControllerProvider", () => {
   it("initializes with valid config", () => {
@@ -37,6 +37,30 @@ describe("ClashControllerProvider", () => {
     expect(identity).toEqual({ ip: "203.0.113.8", country: "Japan", region: "Tokyo", city: "Chiyoda" });
   });
 
+  it("rotate only cycles among the user's selected node subset when configured", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ now: "node-a", all: ["node-a", "node-b", "node-c"] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const provider = new ClashControllerProvider({ ...validConfig(), selectedNodes: ["node-a", "node-c"] }, fetcher);
+
+    await provider.rotate();
+
+    expect(fetcher).toHaveBeenNthCalledWith(2, "http://127.0.0.1:9090/proxies/Auto", expect.objectContaining({ body: JSON.stringify({ name: "node-c" }), method: "PUT" }));
+  });
+
+  it("rotate falls back to the full node list when the selected subset is entirely stale", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ now: "node-a", all: ["node-a", "node-b"] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const provider = new ClashControllerProvider({ ...validConfig(), selectedNodes: ["node-removed"] }, fetcher);
+
+    await provider.rotate();
+
+    expect(fetcher).toHaveBeenNthCalledWith(2, "http://127.0.0.1:9090/proxies/Auto", expect.objectContaining({ body: JSON.stringify({ name: "node-b" }), method: "PUT" }));
+  });
+
   it("detectIp validates response schema", async () => {
     const provider = new ClashControllerProvider(validConfig(), vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ query: "not-an-ip" })));
 
@@ -55,6 +79,14 @@ describe("ClashControllerProvider", () => {
     ]);
   });
 
+  it("listNodes queries an explicit group override instead of the configured default group", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ now: "node-c", all: ["node-c"], history: [] }));
+    const provider = new ClashControllerProvider(validConfig(), fetcher);
+
+    await expect(provider.listNodes("Fallback")).resolves.toEqual([{ name: "node-c", type: "proxy", alive: true }]);
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:9090/proxies/Fallback", expect.objectContaining({ headers: { Authorization: "Bearer controller-secret" } }));
+  });
+
   it("reads Clash mixed-port for the browser and proxy-aware IP checks", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ "mixed-port": 7897, port: 0, "socks-port": 0 }));
     const provider = new ClashControllerProvider(validConfig(), fetcher);
@@ -64,6 +96,28 @@ describe("ClashControllerProvider", () => {
       "http://127.0.0.1:9090/configs",
       expect.objectContaining({ headers: { Authorization: "Bearer controller-secret" } })
     );
+  });
+});
+
+describe("DirectNetworkRotationProvider", () => {
+  it("detects the machine's own direct outbound IP with no proxy involved", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ query: "203.0.113.8", country: "Japan", regionName: "Tokyo", city: "Chiyoda" }));
+    const provider = new DirectNetworkRotationProvider(fetcher);
+
+    await expect(provider.detectIp()).resolves.toEqual({ ip: "203.0.113.8", country: "Japan", region: "Tokyo", city: "Chiyoda" });
+    expect(fetcher).toHaveBeenCalledWith("http://ip-api.com/json/?fields=query,country,regionName,city", expect.any(Object));
+  });
+
+  it("rotate is a no-op since there is no proxy layer to switch", async () => {
+    const provider = new DirectNetworkRotationProvider(vi.fn<typeof fetch>());
+
+    await expect(provider.rotate()).resolves.toBeUndefined();
+  });
+
+  it("has no getBrowserProxy - the browser launches without any proxy configuration", () => {
+    const provider: NetworkRotationProvider = new DirectNetworkRotationProvider(vi.fn<typeof fetch>());
+
+    expect(provider.getBrowserProxy).toBeUndefined();
   });
 });
 

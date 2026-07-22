@@ -3,7 +3,7 @@ import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { classifyPageState, defaultSelectorHints, type ClassificationResult } from "./pageStateClassifier.js";
 import type { NetworkLease } from "../../shared/types.js";
-import type { NetworkService } from "../services/networkService.js";
+import { translateNetworkFailureReason, type NetworkService } from "../services/networkService.js";
 import type { BrowserProxy } from "../adapters/networkRotationProvider.js";
 import {
   BrowserEngineFailure,
@@ -31,7 +31,7 @@ export type {
   SessionCheckpoint
 } from "./browserSessionTypes.js";
 
-const MANUAL_STATES = new Set(["CaptchaSliderDevice", "CheckboxGate", "ReceptionClosed", "Unknown"]);
+const MANUAL_STATES = new Set(["CaptchaSliderDevice", "ReceptionClosed", "Unknown"]);
 const LOGIN_PATH = /\/login(?:[/?#]|$)/iu;
 
 export class BrowserSessionEngine {
@@ -57,7 +57,7 @@ export class BrowserSessionEngine {
   async startSession(accountId: string, ownership: BrowserSessionOwnership = { taskId: accountId, runId: accountId }): Promise<void> {
     if (this.networkService) {
       const started = await this.startNetworkSession({ accountId, runId: ownership.runId, contextId: ownership.runId, taskId: ownership.taskId, deviceProfileKey: ownership.deviceProfileKey });
-      if (!started) throw new BrowserEngineFailure("ManualTakeoverRequired", "网络控制器需要人工处理后才能打开浏览器。");
+      if (!started) throw new BrowserEngineFailure("ManualTakeoverRequired", translateNetworkFailureReason(this.networkService.lastFailureReason()));
       return;
     }
     await this.launchSession(accountId, ownership);
@@ -83,6 +83,11 @@ export class BrowserSessionEngine {
       launchedContext = await chromium.launchPersistentContext(profileDir, {
         executablePath: this.config.executablePath,
         headless: false,
+        // viewport/isMobile/userAgent alone only override what the page's JS sees (CDP device
+        // metrics); headed Chromium does not shrink its own OS window to match, so a mobile
+        // profile would still show a full desktop-sized window. --window-size makes the visible
+        // window match the emulated device instead of only emulating it invisibly underneath.
+        args: [`--window-size=${descriptor.screen.width},${descriptor.screen.height}`],
         ...(browserProxy ? { proxy: browserProxy } : {}),
         ...descriptor
       });
@@ -115,9 +120,13 @@ export class BrowserSessionEngine {
       await this.validateNetworkLease();
       return true;
     }
+    // Starting a genuinely fresh session (no context is open at this point) always clears any
+    // stale quarantine left behind by an earlier, unrelated run's lease failure or invalidation —
+    // otherwise this shared engine could stay permanently "quarantined" with nothing to review,
+    // and the very next successful launch would trip over the leftover flag on its first action.
+    this.quarantined = false;
     const lease = await this.networkService.acquireLease(input);
     if (lease === "manual-takeover") {
-      this.quarantined = true;
       return false;
     }
     try {
@@ -272,6 +281,16 @@ export class BrowserSessionEngine {
 
   isSessionActive(): boolean {
     return Boolean(this.context && this.page && !this.context.isClosed());
+  }
+
+  currentOwnership(): Readonly<{ runId: string; accountId: string }> | undefined {
+    if (!this.isSessionActive() || !this.ownership || !this.accountId) return undefined;
+    return { runId: this.ownership.runId, accountId: this.accountId };
+  }
+
+  /** Why the most recent startNetworkSession() call returned false, if it did. */
+  lastNetworkFailureReason(): string | undefined {
+    return this.networkService?.lastFailureReason();
   }
 
   getCurrentHtml(): Promise<string> {

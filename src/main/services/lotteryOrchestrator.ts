@@ -3,14 +3,16 @@ import { makeIdempotencyKey, stableJson } from "../../core/digest.js";
 import type { AccountRun, DeviceProfileKey, LotteryPreference, LotteryTask, PaymentDiscoveryCheckpoint, SubmissionAuthorization, SubmissionDispatchInput, SubmissionIntent } from "../../shared/types.js";
 import type { EplusBrowserAdapter, ReceiptData } from "../adapters/eplusAdapter.js";
 import { BrowserEngineFailure, type BrowserSessionEngine } from "../engines/browserSessionEngine.js";
-import type { NetworkService } from "./networkService.js";
+import { translateNetworkFailureReason, type NetworkService } from "./networkService.js";
 import type { AppDatabase } from "../storage/database.js";
 import type { EventSnapshot } from "../../shared/types.js";
 import { SubmissionGuard } from "./submissionGuard.js";
+import { DecisionTemplateStore } from "./decisionTemplateStore.js";
 
-type SubmissionAdapter = Pick<EplusBrowserAdapter, "openEvent" | "detectChallenge" | "login" | "enterEmailCode" | "discoverPaymentOptions" | "applyPreference" | "readReviewPage" | "submitApplication" | "readReceipt"> & Partial<Pick<EplusBrowserAdapter, "enterSerialCode" | "selectSerialDay">>;
+type SubmissionAdapter = Pick<EplusBrowserAdapter, "openEvent" | "detectChallenge" | "login" | "enterEmailCode" | "discoverPaymentOptions" | "applyPreference" | "readReviewPage" | "submitApplication" | "readReceipt"> & Partial<Pick<EplusBrowserAdapter, "enterSerialCode" | "selectSerialDay" | "acknowledgeInterstitial" | "discoverConsentControls" | "applyConsentSelections" | "confirmConsentChecked">>;
 type SessionEngine = Pick<BrowserSessionEngine, "startNetworkSession" | "reuseSession" | "manualTakeover" | "close">;
-type SessionEngineWithManualBridge = SessionEngine & Partial<Pick<BrowserSessionEngine, "isSessionActive" | "resumeManualTakeover" | "captureManualSnapshot">>;
+type SessionEngineWithManualBridge = SessionEngine & Partial<Pick<BrowserSessionEngine, "isSessionActive" | "resumeManualTakeover" | "captureManualSnapshot" | "currentOwnership" | "lastNetworkFailureReason">>;
+type TemplateStore = Pick<DecisionTemplateStore, "match" | "save">;
 export interface MailAttributionService {
   readCode?(input: { accountId: string; startedAt: string }): Promise<{ code?: string; manualActionRequired: boolean }>;
   waitForApplicationConfirmation?(input: { accountId: string; startedAt: string; timeoutMs?: number }): Promise<{ confirmed: boolean; receivedAt?: string; reason: string }>;
@@ -24,14 +26,31 @@ export class LotteryOrchestrator {
     private readonly db: AppDatabase,
     private readonly mailAttribution: MailAttributionService,
     private readonly decryptSecret: (cipherText: string) => string,
-    private readonly submissionGuard: SubmissionGuard
+    private readonly submissionGuard: SubmissionGuard,
+    private readonly decisionTemplates: TemplateStore = new DecisionTemplateStore(db)
   ) {}
 
   async resumeManualTakeover(runId: string): Promise<void> {
     const active = this.engine.isSessionActive?.() ?? false;
     if (!active) return;
+    await this.tryCaptureConsentTemplate(runId);
     await this.engine.captureManualSnapshot?.();
     this.engine.resumeManualTakeover?.();
+  }
+
+  private async tryCaptureConsentTemplate(runId: string): Promise<void> {
+    const run = this.db.listRuns().find((candidate) => candidate.id === runId);
+    const candidates = run?.resumeCheckpoint?.consentCandidates;
+    if (run?.resumeCheckpoint?.manualReason !== "checkbox-gate" || !Array.isArray(candidates) || candidates.length === 0 || !this.adapter.confirmConsentChecked) return;
+    const confirmed = await this.adapter.confirmConsentChecked(candidates as { groupKey: string; domValue: string; label: string }[]);
+    if (confirmed.length === candidates.length) {
+      const templateKey = typeof run.resumeCheckpoint.templateKey === "string" ? run.resumeCheckpoint.templateKey : this.templateKeyFor(run);
+      this.decisionTemplates.save(run.taskId, templateKey, confirmed);
+    }
+  }
+
+  private templateKeyFor(run: AccountRun): string {
+    return run.serialPlan?.applicationLinkId ?? run.serialPlan?.daySelection?.[0] ?? "default";
   }
 
   async enterVerificationCode(runId: string, code: string): Promise<void> {
@@ -56,13 +75,16 @@ export class LotteryOrchestrator {
     if (this.hasExistingApplication(input.run.accountId, input.event, input.run)) return this.finishAlreadyApplied(input.run);
     const deviceProfileKey = input.task.deviceProfileKey ?? "desktop-chrome";
     this.guardAction(input.task.id, input.run.id, deviceProfileKey);
-    const hadSession = this.engine.isSessionActive?.() ?? false;
-    const started = hadSession || await this.engine.startNetworkSession({ accountId: input.run.accountId, runId: input.run.id, contextId: input.run.id, taskId: input.task.id, deviceProfileKey, launchGuard: () => this.guardAction(input.task.id, input.run.id, deviceProfileKey) });
+    const active = this.engine.isSessionActive?.() ?? false;
+    const owner = this.engine.currentOwnership?.();
+    const resumingSameRun = active && owner?.runId === input.run.id;
+    if (active && !resumingSameRun) await this.engine.close();
+    const started = resumingSameRun || await this.engine.startNetworkSession({ accountId: input.run.accountId, runId: input.run.id, contextId: input.run.id, taskId: input.task.id, deviceProfileKey, launchGuard: () => this.guardAction(input.task.id, input.run.id, deviceProfileKey) });
     this.guardAction(input.task.id, input.run.id, deviceProfileKey);
-    if (!started) return this.pause(input.run, "Network lease requires manual takeover.");
+    if (!started) return this.pause(input.run, translateNetworkFailureReason(this.engine.lastNetworkFailureReason?.()), "AwaitingManualAction", { manualReason: "network" });
     try {
-      this.update(input.run, hadSession ? input.run.status : "LoggingIn");
-      if (!hadSession) await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.openEvent(input.event.canonicalUrl));
+      this.update(input.run, resumingSameRun ? input.run.status : "LoggingIn");
+      if (!resumingSameRun) await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.openEvent(this.resolveEntryUrl(input.event, input.run)));
       let challenge = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.detectChallenge());
       let verificationStartedAt = new Date().toISOString();
       if (challenge === "Login") {
@@ -98,15 +120,29 @@ export class LotteryOrchestrator {
         await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.enterEmailCode(result.code as string));
         challenge = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.detectChallenge());
       }
+      if (challenge === "InterstitialConsent" && this.adapter.acknowledgeInterstitial) {
+        await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.acknowledgeInterstitial?.() ?? Promise.resolve());
+        challenge = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.detectChallenge());
+      }
+      if (challenge === "CheckboxGate") {
+        const outcome = await this.resolveConsentGate(input.task.id, input.run, deviceProfileKey);
+        if (outcome.status === "manual") return this.pause(this.requireRun(input.run.id), "Manual browser takeover required.", "AwaitingManualAction", outcome.resumeCheckpoint);
+        challenge = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.detectChallenge());
+      }
       if (challenge === "CaptchaSliderDevice" || challenge === "CheckboxGate" || challenge === "Unknown") return this.pause(this.requireRun(input.run.id), "Manual browser takeover required.");
       this.update(this.requireRun(input.run.id), "FillingForm");
       if (!input.authorization) {
         const discovery = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.discoverPaymentOptions());
-        this.submissionGuard.saveDiscovery(this.discoveryCheckpoint(input.task.id, input.run.id, input.event.pageFingerprint, deviceProfileKey, discovery.groups));
-        return this.pause(this.requireRun(input.run.id), "Select discovered payment options.");
+        const checkpoint = this.discoveryCheckpoint(input.task.id, input.run.id, input.event.pageFingerprint, deviceProfileKey, discovery.groups);
+        this.submissionGuard.saveDiscovery(checkpoint);
+        const templateKey = this.templateKeyFor(input.run);
+        const matched = this.decisionTemplates.match(input.task.id, templateKey, checkpoint.groups);
+        if (!matched) return this.pause(this.requireRun(input.run.id), "Select discovered payment options.");
+        this.submissionGuard.select({ taskId: input.task.id, runId: input.run.id, checkpointId: checkpoint.checkpointId, checkpointRevision: checkpoint.checkpointRevision, candidateIds: [...matched], expectedControlFingerprint: checkpoint.controlFingerprint }, 1);
+        this.db.addLog({ taskId: input.task.id, accountRunId: input.run.id, level: "info", message: "decision-template.auto-applied", metadata: { templateKey } });
       }
       this.submissionGuard.assertPersistedSelection(input.run.id, input.task.id);
-      await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.applyPreference(this.effectivePreference(input.task.preference, input.run.accountId, input.run.id)));
+      await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.applyPreference(this.db.getPaymentSelections(input.run.id) ?? []));
       const review = await this.guardedAction(input.task.id, input.run.id, deviceProfileKey, () => this.adapter.readReviewPage());
       if (!this.submissionGuard.bindReview(input.run.id, input.task.id, review)) return this.requireRun(input.run.id);
       return this.pause(this.requireRun(input.run.id), "Awaiting final user confirmation.", "AwaitingSubmitConfirmation");
@@ -202,7 +238,26 @@ export class LotteryOrchestrator {
     this.submissionGuard.recover(runId);
   }
 
-  private effectivePreference(preference: LotteryPreference, accountId: string, runId: string): LotteryPreference { const selection = this.db.getPaymentSelections(runId)?.find((option) => option.groupKey === "payment"); if (!selection) throw new Error("Verified payment selection is missing."); const run = this.db.listRuns().find((candidate) => candidate.id === runId); const plan = run?.serialPlan; return { ...preference, applicationLinkId: plan?.applicationLinkId ?? preference.applicationLinkId, entries: plan?.entries ?? preference.entries, paymentMethodId: selection.domValue, serialCode: run?.serialCode ?? preference.serialCodesByAccountId?.[accountId] ?? preference.serialCode, daySelectionByAccountId: plan?.daySelection ? { [accountId]: plan.daySelection } : preference.daySelectionByAccountId ? { [accountId]: preference.daySelectionByAccountId[accountId] ?? [] } : undefined }; }
+  private resolveEntryUrl(event: EventSnapshot, run: AccountRun): string {
+    const linkId = run.serialPlan?.applicationLinkId;
+    const link = linkId ? event.rawFormSchema.applicationLinks.find((candidate) => candidate.id === linkId) : undefined;
+    return link?.href ?? event.canonicalUrl;
+  }
+
+  private async resolveConsentGate(taskId: string, run: AccountRun, deviceProfileKey: DeviceProfileKey): Promise<{ status: "resolved" } | { status: "manual"; resumeCheckpoint: Record<string, unknown> }> {
+    if (!this.adapter.discoverConsentControls || !this.adapter.applyConsentSelections) return { status: "manual", resumeCheckpoint: {} };
+    const templateKey = `consent:${this.templateKeyFor(run)}`;
+    const groups = await this.guardedAction(taskId, run.id, deviceProfileKey, () => this.adapter.discoverConsentControls!());
+    const candidates = groups.map((group) => ({ groupKey: group.groupKey, domValue: group.options[0]?.domValue ?? "", label: group.options[0]?.label ?? "" }));
+    const matched = groups.length > 0 ? this.decisionTemplates.match(taskId, templateKey, groups) : undefined;
+    if (matched && matched.length === groups.length) {
+      await this.guardedAction(taskId, run.id, deviceProfileKey, () => this.adapter.applyConsentSelections!(matched));
+      this.db.addLog({ taskId, accountRunId: run.id, level: "info", message: "decision-template.auto-applied", metadata: { templateKey } });
+      return { status: "resolved" };
+    }
+    return { status: "manual", resumeCheckpoint: { manualReason: "checkbox-gate", templateKey, consentCandidates: candidates } };
+  }
+
   private guardAction(taskId: string, runId: string, deviceProfileKey: DeviceProfileKey): void { this.submissionGuard.assertActionAllowed({ taskId, runId, deviceProfileKey }); }
   private async guardedAction<T>(taskId: string, runId: string, deviceProfileKey: DeviceProfileKey, action: () => Promise<T>): Promise<T> { this.guardAction(taskId, runId, deviceProfileKey); const result = await action(); this.guardAction(taskId, runId, deviceProfileKey); return result; }
   private discoveryCheckpoint(taskId: string, runId: string, pageFingerprint: string, deviceProfileKey: DeviceProfileKey, groups: readonly PaymentDiscoveryCheckpoint["groups"][number][]): PaymentDiscoveryCheckpoint {
@@ -220,7 +275,7 @@ export class LotteryOrchestrator {
   private acknowledge(run: AccountRun, receipt: ReceiptData): AccountRun { const applicationId = extractReceiptId(receipt.receiptText); if (!applicationId) return this.unknown(run, "Receipt lacks a verifiable application number."); this.db.updateSubmissionIntent(run.id, "Acknowledged", applicationId); this.db.updateRun({ id: run.id, status: "Submitted", externalApplicationId: applicationId, resumeCheckpoint: { receiptUrl: receipt.url, receiptVerified: true } }); return this.requireRun(run.id); }
   private finishAlreadyApplied(run: AccountRun): AccountRun { this.db.updateRun({ id: run.id, status: "AlreadyApplied", errorDetailRedacted: "Existing application history found." }); return this.requireRun(run.id); }
   private unknown(run: AccountRun, note: string): AccountRun { this.db.updateSubmissionIntent(run.id, "Unknown"); this.db.updateRun({ id: run.id, status: "UnknownSubmissionState", errorDetailRedacted: note }); return this.requireRun(run.id); }
-  private pause(run: AccountRun, note: string, status: "AwaitingManualAction" | "AwaitingEmailCode" | "AwaitingSubmitConfirmation" = "AwaitingManualAction"): AccountRun { this.db.updateRun({ id: run.id, status, errorDetailRedacted: note }); return this.requireRun(run.id); }
+  private pause(run: AccountRun, note: string, status: "AwaitingManualAction" | "AwaitingEmailCode" | "AwaitingSubmitConfirmation" = "AwaitingManualAction", resumeCheckpoint: Record<string, unknown> = {}): AccountRun { this.db.updateRun({ id: run.id, status, errorDetailRedacted: note, resumeCheckpoint }); return this.requireRun(run.id); }
   private update(run: AccountRun, status: AccountRun["status"]): void { this.db.updateRun({ id: run.id, status }); }
   private requireRun(runId: string): AccountRun { const run = this.db.listRuns().find((candidate) => candidate.id === runId); if (!run) throw new Error("Account run not found."); return run; }
   private requireTask(taskId: string): LotteryTask { const task = this.db.listTasks().find((candidate) => candidate.id === taskId); if (!task) throw new Error("Lottery task not found."); return task; }

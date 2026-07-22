@@ -4,6 +4,7 @@ import type { EplusRawFormSchema, EventSnapshot } from "../../shared/types.js";
 import type { AppDatabase } from "../storage/database.js";
 import type { BrowserSessionEngine } from "../engines/browserSessionEngine.js";
 import { parseEplusPage } from "./eplusPageParser.js";
+import { TERMINAL_TASK_STATUSES } from "./taskService.js";
 
 function canonicalizeUrl(input: string): string {
   const url = new URL(input);
@@ -23,6 +24,14 @@ export class EventService {
 
   listEvents(): EventSnapshot[] {
     return this.db.listEvents();
+  }
+
+  deleteEvent(id: string): void {
+    const event = this.db.getEvent(id);
+    if (!event) throw new Error("Event snapshot not found.");
+    const inUse = this.db.listTasks().some((task) => task.eventSnapshotId === id && !TERMINAL_TASK_STATUSES.includes(task.status));
+    if (inUse) throw new Error("有未完成的任务仍在使用该演出快照，请先取消或完成该任务。");
+    this.db.deleteEvent(id);
   }
 
   async discoverFromUrl(sourceUrl: string): Promise<EventSnapshotInput> {

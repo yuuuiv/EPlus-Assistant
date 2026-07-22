@@ -81,7 +81,9 @@ export class ProfileHarvester {
       return { runId, status, profile, companions: profile.companions, applicationRecords, lotteryResults, harvestedFields, failedFields };
     } catch (error) {
       if (isManualTakeover(error)) {
-        const errorDetail = "Manual action is required before profile harvesting can continue.";
+        // Keep the underlying reason (e.g. a network lease failure vs. a login/CAPTCHA
+        // challenge) instead of one generic sentence for every manual-takeover cause.
+        const errorDetail = error instanceof Error && error.message ? error.message : "Manual action is required before profile harvesting can continue.";
         this.db.updateProfileHarvestRun({ id: runId, status: "AwaitingManualAction", harvestedFields, errorDetail });
         return { runId, status: "AwaitingManualAction", harvestedFields, failedFields, errorDetail };
       }
