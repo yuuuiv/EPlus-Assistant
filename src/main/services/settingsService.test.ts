@@ -10,20 +10,62 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
 describe("network settings migration", () => {
-  it("migrates a legacy flat selectedNodes field into nodeSelectionsByGroup and never leaks the retired key back out", async () => {
+  async function serviceWithStoredNetwork(stored: Record<string, unknown>): Promise<SettingsService> {
     const directory = await mkdtemp(path.join(os.tmpdir(), "eplus-settings-"));
     directories.push(directory);
     const db = new AppDatabase(directory);
     await db.open();
     const secretStore = { encryptString: vi.fn((value: string) => value), decryptString: vi.fn((value: string) => value), encryptJson: vi.fn(), decryptJson: vi.fn() };
-    const service = new SettingsService(db, secretStore as never);
-    // Simulate a settings row saved under the old schema, before nodeSelectionsByGroup existed.
-    db.setSetting("network", { controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Proxies", requiredCountry: "Japan", policy: "required", secretConfigured: true, selectedNodes: ["node-a", "node-b"] });
+    db.setSetting("network", stored);
+    return new SettingsService(db, secretStore as never);
+  }
+
+  it("migrates a legacy flat selectedNodes field into a named node-subset preset and never leaks the retired key back out", async () => {
+    const service = await serviceWithStoredNetwork({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Proxies", requiredCountry: "Japan", policy: "required", secretConfigured: true, selectedNodes: ["node-a", "node-b"] });
 
     const settings = service.getNetworkSettings();
 
-    expect(settings.nodeSelectionsByGroup).toEqual({ Proxies: ["node-a", "node-b"] });
+    expect(settings.nodeSubsetPresets).toEqual([{ name: "Proxies", nodes: ["node-a", "node-b"] }]);
+    expect(settings.activeNodeSubsetPresetName).toBe("Proxies");
     expect(settings).not.toHaveProperty("selectedNodes");
+  });
+
+  it("migrates the intermediate per-group nodeSelectionsByGroup shape into named presets and never leaks the retired key back out", async () => {
+    const service = await serviceWithStoredNetwork({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Fallback", requiredCountry: "Japan", policy: "required", secretConfigured: true, nodeSelectionsByGroup: { Proxies: ["node-a"], Fallback: ["node-c"] } });
+
+    const settings = service.getNetworkSettings();
+
+    expect(settings.nodeSubsetPresets).toEqual(expect.arrayContaining([{ name: "Proxies", nodes: ["node-a"] }, { name: "Fallback", nodes: ["node-c"] }]));
+    expect(settings.activeNodeSubsetPresetName).toBe("Fallback");
+    expect(settings).not.toHaveProperty("nodeSelectionsByGroup");
+  });
+
+  it("resolveProxyGroup reuses an already-resolved group without any network call", async () => {
+    const service = await serviceWithStoredNetwork({ controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Proxies", requiredCountry: "Japan", policy: "required", secretConfigured: true });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(service.resolveProxyGroup()).resolves.toBe("Proxies");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("resolveProxyGroup auto-discovers and persists the first live group when none is resolved yet", async () => {
+    const service = await serviceWithStoredNetwork({ controller: "clash", host: "127.0.0.1", port: 9090, requiredCountry: "Japan", policy: "required", secretConfigured: false });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ proxies: { Auto: { all: ["node-a"] }, "node-a": {} } }), { status: 200 })));
+    vi.spyOn(service, "getClashConnectionConfig").mockReturnValue({ host: "127.0.0.1", port: 9090, secret: "topsecret" });
+
+    await expect(service.resolveProxyGroup()).resolves.toBe("Auto");
+    expect(service.getNetworkSettings().proxyGroup).toBe("Auto");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("resolveProxyGroup returns undefined when the controller isn't configured", async () => {
+    const service = await serviceWithStoredNetwork({ controller: "clash", host: "", requiredCountry: "Japan", policy: "required", secretConfigured: false });
+
+    await expect(service.resolveProxyGroup()).resolves.toBeUndefined();
   });
 });
 

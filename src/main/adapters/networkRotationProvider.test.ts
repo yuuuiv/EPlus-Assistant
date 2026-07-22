@@ -10,7 +10,28 @@ describe("ClashControllerProvider", () => {
     expect(() => new ClashControllerProvider({ ...validConfig(), host: "" }, fetch)).toThrow("host");
     expect(() => new ClashControllerProvider({ ...validConfig(), port: 0 }, fetch)).toThrow("port");
     expect(() => new ClashControllerProvider({ ...validConfig(), secret: "" }, fetch)).toThrow("secret");
-    expect(() => new ClashControllerProvider({ ...validConfig(), proxyGroup: "" }, fetch)).toThrow("proxyGroup");
+  });
+
+  it("allows construction without a resolved proxyGroup yet, but rejects group-scoped calls until one is known", async () => {
+    const { proxyGroup: _proxyGroup, ...configWithoutGroup } = validConfig();
+    const provider = new ClashControllerProvider(configWithoutGroup, vi.fn<typeof fetch>());
+
+    await expect(provider.rotate()).rejects.toThrow("No Clash proxy group is resolved yet.");
+  });
+
+  it("listGroups discovers group names live, filtering out individual leaf proxies", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      proxies: {
+        Auto: { type: "Selector", now: "node-a", all: ["node-a", "node-b"] },
+        Fallback: { type: "Fallback", now: "node-c", all: ["node-c"] },
+        "node-a": { type: "ss" },
+        "node-b": { type: "ss" }
+      }
+    }));
+    const provider = new ClashControllerProvider(validConfig(), fetcher);
+
+    await expect(provider.listGroups()).resolves.toEqual(["Auto", "Fallback"]);
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:9090/proxies", expect.objectContaining({ headers: { Authorization: "Bearer controller-secret" } }));
   });
 
   it("mocked rotate then detect yields a changed policy-approved identity", async () => {

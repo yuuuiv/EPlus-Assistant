@@ -43,7 +43,7 @@ const api: ElectronApi = {
   importNetworkConfig: (input) => ipcRenderer.invoke("settings:import-network", input),
   detectIp: () => ipcRenderer.invoke("network:detect"),
   rotateIp: () => ipcRenderer.invoke("network:rotate"),
-  listNetworkNodes: (proxyGroup) => ipcRenderer.invoke("network:list-nodes", proxyGroup ? { proxyGroup } : undefined),
+  listNetworkNodes: () => ipcRenderer.invoke("network:list-nodes"),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };
 

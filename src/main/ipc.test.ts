@@ -52,27 +52,27 @@ describe("IPC + preload", () => {
     await expect(create(rendererEvent(fixture.webContents), { eventSnapshotId: fixture.eventId, accountIds: [fixture.accountId], confirmationPolicy: "disabled", automationRiskAcknowledgement: { version: 1, acknowledgedAt: "2026-07-21T00:00:00.000Z", disclosureDigest: "digest" }, preference: { entries: [], paymentMethodId: "4111111111111111", consentFlags: {}, serialCode: "code", daySelectionByAccountId: { [fixture.accountId]: ["day1"] } } })).rejects.toThrow("Payment credential fields");
   });
 
-  it("saves a per-proxy-group node selection and keeps it distinct from other saved groups", async () => {
+  it("saves named node-subset presets and the active preset selection", async () => {
     const fixture = await createFixture();
     const save = handlers.get("settings:save-network");
     const get = handlers.get("settings:get-network");
     if (!save || !get) throw new Error("Expected network settings handlers.");
 
-    await save(rendererEvent(fixture.webContents), { controller: "clash", host: "127.0.0.1", port: 9090, secret: "topsecret", proxyGroup: "Proxies", proxyGroups: ["Proxies", "Fallback"], nodeSelectionsByGroup: { Proxies: ["node-a", "node-b"] }, requiredCountry: "Japan", policy: "required" });
-    await save(rendererEvent(fixture.webContents), { controller: "clash", host: "127.0.0.1", port: 9090, proxyGroup: "Fallback", proxyGroups: ["Proxies", "Fallback"], nodeSelectionsByGroup: { Proxies: ["node-a", "node-b"], Fallback: ["node-c"] }, requiredCountry: "Japan", policy: "required" });
+    await save(rendererEvent(fixture.webContents), { controller: "clash", host: "127.0.0.1", port: 9090, secret: "topsecret", proxyGroup: "Proxies", nodeSubsetPresets: [{ name: "日本优先", nodes: ["node-a", "node-b"] }], activeNodeSubsetPresetName: "日本优先", requiredCountry: "Japan", policy: "required" });
+    await save(rendererEvent(fixture.webContents), { controller: "clash", host: "127.0.0.1", port: 9090, nodeSubsetPresets: [{ name: "日本优先", nodes: ["node-a", "node-b"] }, { name: "备用", nodes: ["node-c"] }], activeNodeSubsetPresetName: "备用", requiredCountry: "Japan", policy: "required" });
 
     const settings = await get(rendererEvent(fixture.webContents), undefined);
-    expect(settings).toMatchObject({ proxyGroup: "Fallback", nodeSelectionsByGroup: { Proxies: ["node-a", "node-b"], Fallback: ["node-c"] } });
+    expect(settings).toMatchObject({ proxyGroup: "Proxies", activeNodeSubsetPresetName: "备用", nodeSubsetPresets: [{ name: "日本优先", nodes: ["node-a", "node-b"] }, { name: "备用", nodes: ["node-c"] }] });
   });
 
-  it("rejects the retired flat selectedNodes field and accepts an optional group override for network:list-nodes", async () => {
+  it("rejects the retired flat selectedNodes field and requires a configured controller before listing nodes", async () => {
     const fixture = await createFixture();
     const save = handlers.get("settings:save-network");
     const listNodes = handlers.get("network:list-nodes");
     if (!save || !listNodes) throw new Error("Expected network handlers.");
 
     await expect(save(rendererEvent(fixture.webContents), { controller: "clash", host: "127.0.0.1", port: 9090, secret: "topsecret", proxyGroup: "Proxies", selectedNodes: ["node-a"], requiredCountry: "Japan", policy: "required" })).rejects.toThrow("Invalid IPC payload");
-    await expect(listNodes(rendererEvent(fixture.webContents), { proxyGroup: "not-configured" })).rejects.toThrow();
+    await expect(listNodes(rendererEvent(fixture.webContents), undefined)).rejects.toThrow();
   });
 });
 

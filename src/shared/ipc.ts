@@ -112,7 +112,7 @@ export interface ElectronApi {
   importNetworkConfig(input: NetworkImportInput): Promise<NetworkImportResult>;
   detectIp(): Promise<IpIdentity>;
   rotateIp(): Promise<void>;
-  listNetworkNodes(proxyGroup?: string): Promise<NetworkNode[]>;
+  listNetworkNodes(): Promise<NetworkNode[]>;
   openDataFolder(): Promise<void>;
 }
 

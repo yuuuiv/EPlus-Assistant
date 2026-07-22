@@ -102,6 +102,10 @@ export class ProfileHarvester {
     if (input.existingSession && this.engine.isSessionActive() && (await this.engine.reuseSession())) return;
     if (this.engine.isSessionActive()) await this.engine.close();
     await this.engine.startSession(input.accountId);
+    // Landing on a member.eplus.jp page cold, with no prior visit to the main
+    // eplus.jp domain, is what triggers eplus's Akamai-fronted login gateway to
+    // reject the request outright instead of showing a normal login prompt.
+    await this.adapter.openHome();
     await this.adapter.openMemberProfile();
     let state = await this.adapter.detectChallenge();
     if (state === "Login") {

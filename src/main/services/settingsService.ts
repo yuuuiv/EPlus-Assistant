@@ -6,9 +6,10 @@ import type {
   VerificationMailboxUpdate,
   NetworkSettings,
   NetworkSettingsUpdate,
-  NetworkImportResult
+  NetworkImportResult,
+  NodeSubsetPreset
 } from "../../shared/types.js";
-import type { ClashConfig } from "../adapters/networkRotationProvider.js";
+import { ClashControllerProvider, type ClashConfig } from "../adapters/networkRotationProvider.js";
 import { createMailProvider, DEFAULT_CERISE_BOUQUET_ENDPOINT, type ApplicationConfirmationResult, type MailProviderConfig } from "../adapters/mailProviders.js";
 import type { AppDatabase } from "../storage/database.js";
 import type { SecretStore } from "../storage/secretStore.js";
@@ -43,7 +44,6 @@ const defaultNetworkSettings: NetworkSettings = {
   controller: "clash",
   host: "",
   port: 9090,
-  proxyGroup: "",
   requiredCountry: "Japan",
   policy: "required",
   secretConfigured: false
@@ -96,22 +96,22 @@ export class SettingsService {
 
   getNetworkSettings(): NetworkSettings {
     // Reconstruct explicitly (rather than spreading the raw stored blob) so a settings row
-    // saved under an older schema - e.g. the retired flat `selectedNodes` field - can never leak
-    // an unrecognized key back out to the renderer, where the strict IPC save schema would
-    // reject it as soon as the user tries to save again.
-    const stored = this.db.getSetting<NetworkSettings & { selectedNodes?: string[] }>(NETWORK_SETTING_KEY);
+    // saved under an older schema - e.g. the retired flat `selectedNodes`/`nodeSelectionsByGroup`
+    // fields - can never leak an unrecognized key back out to the renderer, where the strict IPC
+    // save schema would reject it as soon as the user tries to save again.
+    const stored = this.db.getSetting<NetworkSettings & { selectedNodes?: string[]; nodeSelectionsByGroup?: Record<string, string[]> }>(NETWORK_SETTING_KEY);
     if (!stored) return envNetworkSettings() ?? defaultNetworkSettings;
-    const migratedNodeSelections = stored.nodeSelectionsByGroup ?? (stored.selectedNodes?.length && stored.proxyGroup ? { [stored.proxyGroup]: stored.selectedNodes } : undefined);
+    const migrated = stored.nodeSubsetPresets ? { presets: stored.nodeSubsetPresets, activeName: stored.activeNodeSubsetPresetName } : migrateLegacyNodeSelections(stored);
     return {
       controller: stored.controller ?? "clash",
       host: stored.host,
       port: stored.port,
-      proxyGroup: stored.proxyGroup,
       requiredCountry: stored.requiredCountry,
       policy: stored.policy,
       secretConfigured: stored.secretConfigured || Boolean(process.env.EPLUS_CLASH_SECRET?.trim()),
-      ...(stored.proxyGroups ? { proxyGroups: stored.proxyGroups } : {}),
-      ...(migratedNodeSelections ? { nodeSelectionsByGroup: migratedNodeSelections } : {}),
+      ...(stored.proxyGroup ? { proxyGroup: stored.proxyGroup } : {}),
+      ...(migrated?.presets.length ? { nodeSubsetPresets: migrated.presets } : {}),
+      ...(migrated?.activeName ? { activeNodeSubsetPresetName: migrated.activeName } : {}),
       ...(stored.updatedAt ? { updatedAt: stored.updatedAt } : {})
     };
   }
@@ -123,13 +123,13 @@ export class SettingsService {
       controller: input.controller,
       host: input.host.trim(),
       port: Math.max(1, Math.floor(Number(input.port) || defaultNetworkSettings.port)),
-      proxyGroup: input.proxyGroup.trim(),
-      proxyGroups: input.proxyGroups?.map((group) => group.trim()).filter(Boolean) ?? existing.proxyGroups,
-      nodeSelectionsByGroup: input.nodeSelectionsByGroup ?? existing.nodeSelectionsByGroup,
       requiredCountry: input.requiredCountry.trim(),
       policy: input.policy.trim() || defaultNetworkSettings.policy,
       secretConfigured: Boolean(secret) || existing.secretConfigured,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      ...((input.proxyGroup?.trim() || existing.proxyGroup) ? { proxyGroup: input.proxyGroup?.trim() || existing.proxyGroup } : {}),
+      ...((input.nodeSubsetPresets ?? existing.nodeSubsetPresets) ? { nodeSubsetPresets: input.nodeSubsetPresets ?? existing.nodeSubsetPresets } : {}),
+      ...((input.activeNodeSubsetPresetName ?? existing.activeNodeSubsetPresetName) ? { activeNodeSubsetPresetName: input.activeNodeSubsetPresetName ?? existing.activeNodeSubsetPresetName } : {})
     };
     if (secret) this.db.setSetting(NETWORK_SECRET_SETTING_KEY, this.secretStore.encryptString(secret));
     this.db.setSetting(NETWORK_SETTING_KEY, settings);
@@ -137,10 +137,38 @@ export class SettingsService {
     return settings;
   }
 
+  /** Resolves and persists which real Clash proxy-group actually drives rotation, without ever
+   *  asking the user to name or pick it: reuse whatever was already resolved, otherwise ask the
+   *  live controller for its groups and take the first one. */
+  async resolveProxyGroup(): Promise<string | undefined> {
+    const existing = this.getNetworkSettings();
+    if (existing.proxyGroup) return existing.proxyGroup;
+    const connection = this.getClashConnectionConfig();
+    if (!connection) return undefined;
+    const provider = new ClashControllerProvider(connection);
+    const groups = await provider.listGroups();
+    const resolved = groups?.[0];
+    if (!resolved) return undefined;
+    this.db.setSetting(NETWORK_SETTING_KEY, { ...existing, proxyGroup: resolved });
+    return resolved;
+  }
+
+  /** Host/port/secret only - enough to talk to the controller before any specific group is known. */
+  getClashConnectionConfig(): { readonly host: string; readonly port: number; readonly secret: string } | undefined {
+    const settings = this.getNetworkSettings();
+    if (settings.controller === "direct") return undefined;
+    const encryptedSecret = this.db.getSetting<string>(NETWORK_SECRET_SETTING_KEY);
+    const secret = encryptedSecret ? this.secretStore.decryptString(encryptedSecret) : process.env.EPLUS_CLASH_SECRET?.trim();
+    if (!settings.host || !secret) return undefined;
+    return { host: settings.host, port: settings.port, secret };
+  }
+
   importNetworkConfig(input: { readonly controller: "clash" | "sing-box"; readonly text: string }): NetworkImportResult {
     const parsed = parseNetworkControllerConfig(input.controller, input.text);
     const current = this.getNetworkSettings();
-    return { controller: input.controller, host: parsed.host, port: parsed.port, secret: parsed.secret, proxyGroup: parsed.proxyGroup, proxyGroups: parsed.proxyGroups, availableNodes: parsed.availableNodes, requiredCountry: current.requiredCountry, policy: current.policy };
+    // proxyGroup is a starting point only - the user never has to confirm or rename it; a later
+    // resolveProxyGroup()/live read can still discover the real group name from the controller.
+    return { controller: input.controller, host: parsed.host, port: parsed.port, secret: parsed.secret, proxyGroup: parsed.proxyGroup, availableNodes: parsed.availableNodes, requiredCountry: current.requiredCountry, policy: current.policy };
   }
 
   getClashConfig(): ClashConfig | undefined {
@@ -149,8 +177,8 @@ export class SettingsService {
     const encryptedSecret = this.db.getSetting<string>(NETWORK_SECRET_SETTING_KEY);
     const secret = encryptedSecret ? this.secretStore.decryptString(encryptedSecret) : process.env.EPLUS_CLASH_SECRET?.trim();
     if (!settings.host || !settings.proxyGroup || !secret) return undefined;
-    const selectedNodes = settings.nodeSelectionsByGroup?.[settings.proxyGroup];
-    return { host: settings.host, port: settings.port, secret, proxyGroup: settings.proxyGroup, ...(selectedNodes?.length ? { selectedNodes } : {}) };
+    const activePreset = settings.nodeSubsetPresets?.find((preset) => preset.name === settings.activeNodeSubsetPresetName);
+    return { host: settings.host, port: settings.port, secret, proxyGroup: settings.proxyGroup, ...(activePreset?.nodes.length ? { selectedNodes: activePreset.nodes } : {}) };
   }
 
   async testVerificationMailbox(): Promise<ValidationResult> {
@@ -390,6 +418,17 @@ function readNestedScalar(record: Record<string, unknown>, path: readonly string
     current = current[key];
   }
   return typeof current === "string" && current.trim() ? current.trim() : typeof current === "number" ? String(current) : undefined;
+}
+
+/** Converts a settings row saved under the pre-preset schema (a flat `selectedNodes` list, or a
+ *  per-Clash-group `nodeSelectionsByGroup` map) into the current named-preset shape. */
+function migrateLegacyNodeSelections(stored: { readonly proxyGroup?: string; readonly selectedNodes?: string[]; readonly nodeSelectionsByGroup?: Record<string, string[]> }): { readonly presets: NodeSubsetPreset[]; readonly activeName?: string } | undefined {
+  const map = stored.nodeSelectionsByGroup ?? (stored.selectedNodes?.length && stored.proxyGroup ? { [stored.proxyGroup]: stored.selectedNodes } : undefined);
+  if (!map) return undefined;
+  const presets = Object.entries(map).filter(([, nodes]) => nodes.length > 0).map(([name, nodes]) => ({ name, nodes }));
+  if (presets.length === 0) return undefined;
+  const activeName = (stored.proxyGroup && map[stored.proxyGroup]?.length ? stored.proxyGroup : presets[0]?.name) ?? undefined;
+  return { presets, activeName };
 }
 
 function envNetworkSettings(): NetworkSettings | undefined {

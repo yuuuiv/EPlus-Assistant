@@ -309,17 +309,26 @@ export interface NetworkLease {
   expiresAt: string;
 }
 
+/** A user-named subset of nodes to rotate among, independent of which real Clash proxy group is
+ *  actually driving rotation - the technical group is auto-resolved and not something the user
+ *  needs to name or pick themselves. */
+export interface NodeSubsetPreset {
+  name: string;
+  nodes: string[];
+}
+
 export interface NetworkSettings {
   controller: "clash" | "sing-box" | "direct";
   host: string;
   port: number;
-  proxyGroup: string;
+  /** The real Clash proxy-group/selector name actually driving rotation. Auto-resolved (prefers
+   *  whichever group is discovered live) rather than user-entered. */
+  proxyGroup?: string;
   requiredCountry: string;
   policy: string;
   secretConfigured: boolean;
-  proxyGroups?: string[];
-  /** Hand-picked node subset per proxy group, keyed by group name; empty/absent for a group means use every member. Lets the user save several groups and switch between them without re-picking nodes each time. */
-  nodeSelectionsByGroup?: Record<string, string[]>;
+  nodeSubsetPresets?: NodeSubsetPreset[];
+  activeNodeSubsetPresetName?: string;
   updatedAt?: string;
 }
 
@@ -328,11 +337,11 @@ export interface NetworkSettingsUpdate {
   host: string;
   port: number;
   secret?: string;
-  proxyGroup: string;
+  proxyGroup?: string;
   requiredCountry: string;
   policy: string;
-  proxyGroups?: string[];
-  nodeSelectionsByGroup?: Record<string, string[]>;
+  nodeSubsetPresets?: NodeSubsetPreset[];
+  activeNodeSubsetPresetName?: string;
 }
 
 export interface NetworkImportResult extends NetworkSettingsUpdate {

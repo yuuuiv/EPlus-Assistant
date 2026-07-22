@@ -119,6 +119,67 @@ describe("EplusBrowserAdapter", () => {
     expect(engine.executeStep).toHaveBeenCalledWith("login", expect.any(Object));
   });
 
+  it("visits the main eplus.jp site on openHome", async () => {
+    const engine = engineFixture();
+    const adapter = new EplusBrowserAdapter(engine);
+
+    await adapter.openHome();
+
+    expect(engine.navigate).toHaveBeenCalledWith("https://eplus.jp");
+  });
+
+  it("clicks the hidden login-form trigger before filling credentials when the password field isn't visible yet", async () => {
+    const engine = engineFixture();
+    const adapter = new EplusBrowserAdapter(engine);
+    const filled: Record<string, string> = {};
+    const clicked: string[] = [];
+    const page = {
+      locator: vi.fn((selector: string) => ({
+        first: () => ({
+          isVisible: async () => !selector.includes("loginPassword"),
+          count: async () => 1,
+          fill: async (value: string) => { filled[selector] = value; },
+          click: async () => { clicked.push(selector); }
+        })
+      }))
+    };
+    vi.spyOn(engine, "executeStep").mockImplementation(async (_action, step) => {
+      if (!step) throw new Error("Expected browser step.");
+      await step.execute(page as never);
+      return { beforeState: "Login", action: "login", afterState: "Login" };
+    });
+
+    await adapter.login("person@example.test", "secret");
+
+    expect(clicked).toEqual(["#login-bt a", expect.stringContaining("idPwLogin")]);
+    expect(Object.values(filled)).toEqual(["person@example.test", "secret"]);
+  });
+
+  it("does not click the login-form trigger when the password field is already visible", async () => {
+    const engine = engineFixture();
+    const adapter = new EplusBrowserAdapter(engine);
+    const clicked: string[] = [];
+    const page = {
+      locator: vi.fn((selector: string) => ({
+        first: () => ({
+          isVisible: async () => true,
+          count: async () => 1,
+          fill: async () => undefined,
+          click: async () => { clicked.push(selector); }
+        })
+      }))
+    };
+    vi.spyOn(engine, "executeStep").mockImplementation(async (_action, step) => {
+      if (!step) throw new Error("Expected browser step.");
+      await step.execute(page as never);
+      return { beforeState: "Login", action: "login", afterState: "Login" };
+    });
+
+    await adapter.login("person@example.test", "secret");
+
+    expect(clicked).not.toContain("#login-bt a");
+  });
+
   it("fills and submits the live ninsho serial form", async () => {
     const engine = engineFixture("SerialCode");
     const adapter = new EplusBrowserAdapter(engine);

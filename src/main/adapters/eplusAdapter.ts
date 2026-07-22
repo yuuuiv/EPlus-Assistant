@@ -26,6 +26,7 @@ export interface ReceiptData {
 
 export type { CompanionData, MemberProfileData } from "./eplusMemberPageParser.js";
 
+const EPLUS_HOME_URL = "https://eplus.jp";
 const PHONE_NUMBER_URL = "https://member.eplus.jp/telnumber-ninsho";
 const MEMBER_PROFILE_URL = "https://member.eplus.jp/update-member";
 const SHIPPING_ADDRESS_URL = "https://member.eplus.jp/update-shippingaddress";
@@ -34,9 +35,12 @@ const COMPANION_MANAGEMENT_URL = "https://member.eplus.jp/update-dokosha";
 const APPLICATION_HISTORY_URL = "https://eplus.jp/jyoukyou";
 const LOTTERY_RESULTS_URL = "https://eplus.jp/jyoukyou";
 
-const LOGIN_EMAIL_SELECTOR = "input[type='email'], input[name='login_id'], input[name*='login'], input[name*='mail'], input[id*='mail'], input[placeholder*='メールアドレス']";
-const LOGIN_PASSWORD_SELECTOR = "input[type='password']";
-const LOGIN_SUBMIT_SELECTOR = "button[type='submit'], input[type='submit'], #login-bt a, a#login";
+// The login form itself is hidden behind a "ログイン画面へ" trigger on most eplus pages
+// (event application pages, member pages) and only becomes fillable after clicking it.
+const LOGIN_TRIGGER_SELECTOR = "#login-bt a";
+const LOGIN_EMAIL_SELECTOR = "#loginId, input[name='loginId'], input[type='email'], input[name='login_id'], input[name*='login'], input[name*='mail'], input[id*='mail'], input[placeholder*='メールアドレス']";
+const LOGIN_PASSWORD_SELECTOR = "#loginPassword, input[type='password']";
+const LOGIN_SUBMIT_SELECTOR = "#idPwLogin, button[type='submit'], input[type='submit']";
 const EMAIL_CODE_SELECTOR = "input[name*='verification'], input[name*='code'], input[id*='code']";
 const EMAIL_CODE_SUBMIT_SELECTOR = "button[type='submit'], input[type='submit']";
 const SERIAL_CODE_SELECTOR = "input[name^='ninsho_key'], input[placeholder*='シリアル'], input[id*='ninsho']";
@@ -94,6 +98,17 @@ export class EplusBrowserAdapter {
     await this.requireAutomatableState();
   }
 
+  /**
+   * Visits the main eplus.jp site before a member-area page. Landing on a
+   * member.eplus.jp page cold (no prior visit to the main domain) is what
+   * triggers Akamai's "Access Denied" block on the sp.atom.eplus.jp login
+   * gateway a real browsing session would normally reach with referrer/cookie
+   * context already established.
+   */
+  async openHome(): Promise<void> {
+    await this.engine.navigate(EPLUS_HOME_URL);
+  }
+
   async login(email: string, password: string): Promise<void> {
     const state = await this.requireAutomatableState();
     if (state !== "Login") {
@@ -101,8 +116,14 @@ export class EplusBrowserAdapter {
     }
     await this.engine.executeStep("login", {
       execute: async (page) => {
+        // The login form is hidden behind a "ログイン画面へ" trigger until clicked.
+        const passwordField = page.locator(LOGIN_PASSWORD_SELECTOR).first();
+        if (!(await passwordField.isVisible().catch(() => false))) {
+          const trigger = page.locator(LOGIN_TRIGGER_SELECTOR).first();
+          if (await trigger.count() > 0) await trigger.click();
+        }
         await page.locator(LOGIN_EMAIL_SELECTOR).first().fill(email);
-        await page.locator(LOGIN_PASSWORD_SELECTOR).first().fill(password);
+        await passwordField.fill(password);
         await page.locator(LOGIN_SUBMIT_SELECTOR).first().click();
       }
     });

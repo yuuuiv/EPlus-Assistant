@@ -14,7 +14,8 @@ export interface ClashConfig {
   readonly host: string;
   readonly port: number;
   readonly secret: string;
-  readonly proxyGroup: string;
+  /** Absent until auto-resolved (see SettingsService.resolveProxyGroup) or discovered from an import. */
+  readonly proxyGroup?: string;
   /** When set, rotation only cycles among these node names within proxyGroup, instead of every node Clash reports for it. */
   readonly selectedNodes?: readonly string[];
 }
@@ -30,6 +31,8 @@ export interface NetworkRotationProvider {
   rotate(): Promise<void>;
   getBrowserProxy?(): Promise<BrowserProxy | undefined>;
   listNodes?(groupName?: string): Promise<readonly NodeInfo[]>;
+  /** Every top-level proxy-group name the live controller currently reports, for auto-discovery with no config import needed. */
+  listGroups?(): Promise<readonly string[]>;
   selectNode?(name: string): Promise<void>;
 }
 
@@ -115,6 +118,18 @@ export class ClashControllerProvider implements NetworkRotationProvider {
     });
   }
 
+  /** Queries the controller's full proxy list and returns only the entries that are actual
+   *  groups (selector/url-test/fallback/load-balance, identified by having an "all" member list)
+   *  rather than individual leaf proxies - lets the app discover group names live, with no YAML
+   *  import needed. */
+  async listGroups(): Promise<readonly string[]> {
+    const response = await this.fetcher(`http://${this.config.host}:${this.config.port}/proxies`, { headers: this.headers(), signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`Clash proxy query failed: HTTP ${response.status}`);
+    const data = await response.json();
+    if (!isRecord(data) || !isRecord(data.proxies)) throw new Error("Clash proxy response is invalid");
+    return Object.entries(data.proxies).filter(([, value]) => isRecord(value) && Array.isArray(value.all)).map(([name]) => name);
+  }
+
   async selectNode(name: string): Promise<void> {
     const group = await this.fetchGroup();
     const nodes = readStringArray(group, "all");
@@ -137,7 +152,9 @@ export class ClashControllerProvider implements NetworkRotationProvider {
   }
 
   private groupUrl(groupName?: string): string {
-    return `http://${this.config.host}:${this.config.port}/proxies/${encodeURIComponent(groupName ?? this.config.proxyGroup)}`;
+    const group = groupName ?? this.config.proxyGroup;
+    if (!group) throw new Error("No Clash proxy group is resolved yet.");
+    return `http://${this.config.host}:${this.config.port}/proxies/${encodeURIComponent(group)}`;
   }
 
   private configUrl(): string {
@@ -173,7 +190,6 @@ function validateConfig(config: ClashConfig): void {
   if (!config.host.trim()) throw new Error("Clash host is required");
   if (!Number.isInteger(config.port) || config.port <= 0) throw new Error("Clash port is required");
   if (!config.secret.trim()) throw new Error("Clash secret is required");
-  if (!config.proxyGroup.trim()) throw new Error("Clash proxyGroup is required");
 }
 
 function parseIpInfo(value: unknown): IpInfo {

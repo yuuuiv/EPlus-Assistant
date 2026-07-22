@@ -67,6 +67,22 @@ describe("ProfileHarvester", () => {
     expect(database.getProfile(accountId)?.address).toBe("Prior address");
   });
 
+  it("visits the main eplus.jp site before the member profile page on a fresh (non-reused) session", async () => {
+    const { database, accountId } = await fixture();
+    const engine = Object.create(BrowserSessionEngine.prototype) as BrowserSessionEngine;
+    vi.spyOn(engine, "isSessionActive").mockReturnValue(false);
+    vi.spyOn(engine, "startSession").mockResolvedValue();
+    const adapter = Object.create(EplusBrowserAdapter.prototype) as EplusBrowserAdapter;
+    const calls: string[] = [];
+    vi.spyOn(adapter, "openHome").mockImplementation(async () => { calls.push("openHome"); });
+    vi.spyOn(adapter, "openMemberProfile").mockImplementation(async () => { calls.push("openMemberProfile"); });
+    vi.spyOn(adapter, "detectChallenge").mockResolvedValue("Unknown");
+
+    await new ProfileHarvester(engine, adapter, database).harvest({ accountId, existingSession: false });
+
+    expect(calls).toEqual(["openHome", "openMemberProfile"]);
+  });
+
   it("does not contain site-password extraction behavior", async () => {
     const source = await readFile(path.join(process.cwd(), "src", "main", "services", "profileHarvester.ts"), "utf8");
 
