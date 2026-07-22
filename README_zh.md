@@ -113,7 +113,7 @@ user@example.com,secret,Tokyo-01,"tokyo,day1",true,manual,{}
 
 提交抽选后，运行不会仅凭页面跳转标记为完成。系统必须在本次提交开始时间之后收到当前账号转发来源的邮件，且原始发件人严格为 `info@eplus.co.jp`，正文同时包含 `申込み完了・抽選結果確認期間のご案内`、申请记录链接和申请记录文字，才会进入 `Submitted`。没有匹配邮件时显示 `AwaitingCompletionEmail`，不会重复提交。
 
-**Network** 面板支持 Clash Verge/Clash 和 sing-box Clash API。可以粘贴 YAML/JSON 控制器配置，导入 `external-controller`、`secret` 和代理组/selector，检查后保存。**检测 IP** 显示 IP、国家和地区；**切换 IP** 调用本机控制器切换代理。每个抽选 run 在打开账号会话前都会轮换并校验一次网络租约。
+**Network** 面板支持 Clash Verge/Clash 和 sing-box Clash API。可以粘贴 YAML/JSON 控制器配置，导入 `external-controller`、`secret` 和代理组/selector，检查后保存。程序还会读取 Clash `/configs` 的 `mixed-port`/`port`，把浏览器显式接到该端口，避免只切了节点但浏览器仍走原出口。**检测 IP** 显示 IP、国家和地区；**切换 IP** 调用本机控制器切换代理。每个抽选 run 在打开账号会话前都会轮换、通过同一代理检测出口并校验一次网络租约。你当前的本地默认值是 `127.0.0.1:9097`、代理组 `Proxies`、mixed-port `7897`。
 
 每个 run 完成后，主进程会自动刷新账号资料；账号详情也可以手动刷新。采集入口包括手机号、姓名、性别、出生年份/生日、地址、当前及历史同行者、`https://eplus.jp/jyoukyou` 申请记录和抽选状态。信用卡仅保存品牌和末四位，完整卡号、CVV、有效期不会保存。申请记录和抽选结果支持筛选。
 

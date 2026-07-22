@@ -95,7 +95,8 @@ export class SettingsService {
 
   getNetworkSettings(): NetworkSettings {
     const stored = this.db.getSetting<NetworkSettings>(NETWORK_SETTING_KEY);
-    return stored ? { ...stored, controller: stored.controller ?? "clash" } : defaultNetworkSettings;
+    if (stored) return { ...stored, controller: stored.controller ?? "clash", secretConfigured: stored.secretConfigured || Boolean(process.env.EPLUS_CLASH_SECRET?.trim()) };
+    return envNetworkSettings() ?? defaultNetworkSettings;
   }
 
   saveNetworkSettings(input: NetworkSettingsUpdate): NetworkSettings {
@@ -127,8 +128,9 @@ export class SettingsService {
   getClashConfig(): ClashConfig | undefined {
     const settings = this.getNetworkSettings();
     const encryptedSecret = this.db.getSetting<string>(NETWORK_SECRET_SETTING_KEY);
-    if (!settings.host || !settings.proxyGroup || !encryptedSecret) return undefined;
-    return { host: settings.host, port: settings.port, secret: this.secretStore.decryptString(encryptedSecret), proxyGroup: settings.proxyGroup };
+    const secret = encryptedSecret ? this.secretStore.decryptString(encryptedSecret) : process.env.EPLUS_CLASH_SECRET?.trim();
+    if (!settings.host || !settings.proxyGroup || !secret) return undefined;
+    return { host: settings.host, port: settings.port, secret, proxyGroup: settings.proxyGroup };
   }
 
   async testVerificationMailbox(): Promise<ValidationResult> {
@@ -333,4 +335,22 @@ function readNestedScalar(record: Record<string, unknown>, path: readonly string
     current = current[key];
   }
   return typeof current === "string" && current.trim() ? current.trim() : typeof current === "number" ? String(current) : undefined;
+}
+
+function envNetworkSettings(): NetworkSettings | undefined {
+  const controller = process.env.EPLUS_CLASH_CONTROLLER?.trim();
+  const proxyGroup = process.env.EPLUS_CLASH_PROXY_GROUP?.trim();
+  const secretConfigured = Boolean(process.env.EPLUS_CLASH_SECRET?.trim());
+  if (!controller || !proxyGroup || !secretConfigured) return undefined;
+  const match = controller.match(/^([^:]+):(\d+)$/);
+  if (!match) return undefined;
+  return {
+    controller: "clash",
+    host: match[1] ?? "",
+    port: Number(match[2]),
+    proxyGroup,
+    requiredCountry: process.env.EPLUS_CLASH_REQUIRED_COUNTRY?.trim() || defaultNetworkSettings.requiredCountry,
+    policy: process.env.EPLUS_CLASH_POLICY?.trim() || defaultNetworkSettings.policy,
+    secretConfigured
+  };
 }

@@ -88,7 +88,7 @@ serial 入口解析会保留可执行的 source URL，即使页面 canonical 指
 
 ## 网络配置导入
 
-Clash Verge YAML 需要包含 `external-controller`、`secret` 和至少一个 `proxy-groups[].name`；sing-box JSON/YAML 需要包含 `experimental.clash_api.external_controller`（或等价字段）、`secret` 和 selector/default mode。两者均通过兼容 Clash API 的 `/proxies/{group}` 控制轮换。
+Clash Verge YAML 需要包含 `external-controller`、`secret` 和至少一个 `proxy-groups[].name`；sing-box JSON/YAML 需要包含 `experimental.clash_api.external_controller`（或等价字段）、`secret` 和 selector/default mode。两者均通过兼容 Clash API 的 `/proxies/{group}` 控制轮换，并从 `/configs` 读取 `mixed-port`、`port` 或 `socks-port`。浏览器会使用读取到的代理端口，IP 检测也通过同一代理执行。若没有已保存的网络设置，主进程可从 `EPLUS_CLASH_CONTROLLER`、`EPLUS_CLASH_SECRET`、`EPLUS_CLASH_PROXY_GROUP` 等环境变量初始化。
 
 每个 lottery run 在获取网络租约前轮换并检测一次 IP；租约期间会校验出口 IP 指纹和国家策略。UI 的“检测 IP”会调用 `ip-api.com` 获取地区信息；“切换 IP”只调用本机控制器。
 

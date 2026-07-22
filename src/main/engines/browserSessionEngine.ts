@@ -4,6 +4,7 @@ import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { classifyPageState, defaultSelectorHints, type ClassificationResult } from "./pageStateClassifier.js";
 import type { NetworkLease } from "../../shared/types.js";
 import type { NetworkService } from "../services/networkService.js";
+import type { BrowserProxy } from "../adapters/networkRotationProvider.js";
 import {
   BrowserEngineFailure,
   type BrowserActionExecutor,
@@ -62,7 +63,7 @@ export class BrowserSessionEngine {
     await this.launchSession(accountId, ownership);
   }
 
-  private async launchSession(accountId: string, requestedOwnership: BrowserSessionOwnership, launchGuard?: () => void): Promise<void> {
+  private async launchSession(accountId: string, requestedOwnership: BrowserSessionOwnership, launchGuard?: () => void, browserProxy?: BrowserProxy): Promise<void> {
     if (this.context || this.page) {
       throw new BrowserEngineFailure("ContextQuarantined", "A browser session is already active for this engine.");
     }
@@ -82,6 +83,7 @@ export class BrowserSessionEngine {
       launchedContext = await chromium.launchPersistentContext(profileDir, {
         executablePath: this.config.executablePath,
         headless: false,
+        ...(browserProxy ? { proxy: browserProxy } : {}),
         ...descriptor
       });
       const launchedPage = launchedContext.pages()[0] ?? (await launchedContext.newPage());
@@ -119,7 +121,8 @@ export class BrowserSessionEngine {
       return false;
     }
     try {
-      await this.launchSession(input.accountId, { taskId: input.taskId ?? input.contextId, runId: input.runId, deviceProfileKey: input.deviceProfileKey }, input.launchGuard);
+      const browserProxy = await this.networkService.getBrowserProxy();
+      await this.launchSession(input.accountId, { taskId: input.taskId ?? input.contextId, runId: input.runId, deviceProfileKey: input.deviceProfileKey }, input.launchGuard, browserProxy);
       this.networkLease = lease;
       return true;
     } catch (error) {

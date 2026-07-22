@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { NetworkLease } from "../../shared/types.js";
-import type { IpInfo, NetworkRotationProvider } from "../adapters/networkRotationProvider.js";
+import type { BrowserProxy, IpInfo, NetworkRotationProvider } from "../adapters/networkRotationProvider.js";
 
 const NETWORK_SETTING_KEY = "network";
 const LEASE_TTL_MS = 30 * 60_000;
@@ -39,6 +39,7 @@ export class NetworkService {
     const network = this.settings.getSetting(NETWORK_SETTING_KEY);
     if (!network || !isConfigured(network)) return this.manualTakeover("Network configuration is missing");
     try {
+      if (this.provider.getBrowserProxy) await this.provider.getBrowserProxy();
       await this.provider.rotate();
       const identity = await this.provider.detectIp();
       const fingerprint = this.generateFingerprint(identity.ip);
@@ -70,7 +71,12 @@ export class NetworkService {
   }
 
   async detectCurrentIp(): Promise<IpInfo> {
+    if (this.provider.getBrowserProxy) await this.provider.getBrowserProxy();
     return this.provider.detectIp();
+  }
+
+  async getBrowserProxy(): Promise<BrowserProxy | undefined> {
+    return this.provider.getBrowserProxy ? this.provider.getBrowserProxy() : undefined;
   }
 
   generateFingerprint(ip: string): string {

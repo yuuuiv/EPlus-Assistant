@@ -54,6 +54,17 @@ describe("ClashControllerProvider", () => {
       { name: "node-b", type: "proxy", alive: true }
     ]);
   });
+
+  it("reads Clash mixed-port for the browser and proxy-aware IP checks", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ "mixed-port": 7897, port: 0, "socks-port": 0 }));
+    const provider = new ClashControllerProvider(validConfig(), fetcher);
+
+    await expect(provider.getBrowserProxy()).resolves.toEqual({ server: "http://127.0.0.1:7897" });
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:9090/configs",
+      expect.objectContaining({ headers: { Authorization: "Bearer controller-secret" } })
+    );
+  });
 });
 
 function validConfig(): { host: string; port: number; secret: string; proxyGroup: string } {

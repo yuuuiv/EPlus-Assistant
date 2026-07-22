@@ -1,3 +1,5 @@
+import * as http from "node:http";
+import * as https from "node:https";
 import type { NetworkNode } from "../../shared/types.js";
 export type { NetworkNode } from "../../shared/types.js";
 
@@ -15,11 +17,16 @@ export interface ClashConfig {
   readonly proxyGroup: string;
 }
 
+export interface BrowserProxy {
+  readonly server: string;
+}
+
 type NodeInfo = NetworkNode;
 
 export interface NetworkRotationProvider {
   detectIp(): Promise<IpInfo>;
   rotate(): Promise<void>;
+  getBrowserProxy?(): Promise<BrowserProxy>;
   listNodes?(): Promise<readonly NodeInfo[]>;
   selectNode?(name: string): Promise<void>;
 }
@@ -27,6 +34,8 @@ export interface NetworkRotationProvider {
 type Fetcher = typeof fetch;
 
 export class ClashControllerProvider implements NetworkRotationProvider {
+  private browserProxy: BrowserProxy | undefined;
+
   constructor(
     private readonly config: ClashConfig,
     private readonly fetcher: Fetcher = fetch
@@ -35,11 +44,35 @@ export class ClashControllerProvider implements NetworkRotationProvider {
   }
 
   async detectIp(): Promise<IpInfo> {
-    const response = await this.fetcher("http://ip-api.com/json/?fields=query,country,regionName,city", {
-      signal: AbortSignal.timeout(5_000)
-    });
-    if (!response.ok) throw new Error(`IP detection failed: HTTP ${response.status}`);
-    return parseIpInfo(await response.json());
+    if (!this.browserProxy && this.fetcher === fetch) await this.getBrowserProxy();
+    const url = "http://ip-api.com/json/?fields=query,country,regionName,city";
+    const payload = this.browserProxy
+      ? await requestJsonThroughProxy(url, this.browserProxy)
+      : await this.fetcher(url, { signal: AbortSignal.timeout(5_000) }).then(async (response) => {
+        if (!response.ok) throw new Error(`IP detection failed: HTTP ${response.status}`);
+        return response.json();
+      });
+    return parseIpInfo(payload);
+  }
+
+  async getBrowserProxy(): Promise<BrowserProxy> {
+    const response = await this.fetcher(this.configUrl(), { headers: this.headers(), signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`Clash config query failed: HTTP ${response.status}`);
+    const config = await response.json();
+    if (!isRecord(config)) throw new Error("Clash config response is invalid");
+    const mixedPort = readPositivePort(config, "mixed-port");
+    const httpPort = readPositivePort(config, "port");
+    const socksPort = readPositivePort(config, "socks-port");
+    const proxy = mixedPort
+      ? { server: `http://${this.config.host}:${mixedPort}` }
+      : httpPort
+        ? { server: `http://${this.config.host}:${httpPort}` }
+        : socksPort
+          ? { server: `socks5://${this.config.host}:${socksPort}` }
+          : undefined;
+    if (!proxy) throw new Error("Clash config has no usable mixed-port, port, or socks-port.");
+    this.browserProxy = proxy;
+    return proxy;
   }
 
   async rotate(): Promise<void> {
@@ -101,6 +134,10 @@ export class ClashControllerProvider implements NetworkRotationProvider {
     return `http://${this.config.host}:${this.config.port}/proxies/${encodeURIComponent(this.config.proxyGroup)}`;
   }
 
+  private configUrl(): string {
+    return `http://${this.config.host}:${this.config.port}/configs`;
+  }
+
   private headers(): Record<string, string> {
     return { Authorization: `Bearer ${this.config.secret}` };
   }
@@ -137,6 +174,12 @@ function readNumber(record: Record<string, unknown>, key: string): number | unde
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readPositivePort(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  const port = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined;
+}
+
 function readArray(record: Record<string, unknown>, key: string): readonly unknown[] {
   const value = record[key];
   return Array.isArray(value) ? value : [];
@@ -144,4 +187,41 @@ function readArray(record: Record<string, unknown>, key: string): readonly unkno
 
 function readStringArray(record: Record<string, unknown>, key: string): readonly string[] {
   return readArray(record, key).filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+}
+
+function requestJsonThroughProxy(url: string, proxy: BrowserProxy): Promise<unknown> {
+  const target = new URL(url);
+  const proxyUrl = new URL(proxy.server);
+  if (proxyUrl.protocol !== "http:" && proxyUrl.protocol !== "https:") {
+    throw new Error(`IP detection does not support proxy protocol ${proxyUrl.protocol}; configure Clash mixed-port.`);
+  }
+  const transport = proxyUrl.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request({
+      hostname: proxyUrl.hostname,
+      port: Number(proxyUrl.port || (proxyUrl.protocol === "https:" ? 443 : 80)),
+      method: "GET",
+      path: target.toString(),
+      headers: { Accept: "application/json", Host: target.host },
+      timeout: 5_000
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+          reject(new Error(`IP detection through Clash failed: HTTP ${response.statusCode ?? "unknown"}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`IP detection response is not JSON: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("IP detection through Clash timed out.")));
+    request.on("error", reject);
+    request.end();
+  });
 }
