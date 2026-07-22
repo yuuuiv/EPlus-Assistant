@@ -15,123 +15,60 @@ import { ClashControllerProvider } from "./adapters/networkRotationProvider.js";
 import { NetworkService } from "./services/networkService.js";
 import { LotteryOrchestrator } from "./services/lotteryOrchestrator.js";
 import { QueueService } from "./services/queueService.js";
-
-const idSchema = z.string().trim().min(1).max(128);
-const emptySchema = z.undefined();
-const recordSchema = z.record(z.string(), z.unknown());
-const addAccountSchema = z.object({
-  id: idSchema.optional(), label: z.string().optional(), eplusEmail: z.string().email(), password: z.string().min(1),
-  mailProviderId: z.string().optional(), mailConfig: recordSchema.optional(), tags: z.array(z.string()).optional(), enabled: z.boolean().optional()
-}).strict();
-const importAccountsSchema = z.object({ kind: z.enum(["csv", "json"]), text: z.string().min(1) }).strict();
-const discoverEventSchema = z.object({ sourceUrl: z.string().url() }).strict();
-const eventSnapshotSchema = z.object({
-  sourceUrl: z.string().url(), canonicalUrl: z.string().url().optional(), title: z.string().min(1), venue: z.string().optional(),
-  scheduleText: z.string().optional(), applicationDeadline: z.string().optional(), pageFingerprint: z.string().optional(), rawFormSchemaJson: z.string().optional()
-}).strict();
+import { SubmissionGuard } from "./services/submissionGuard.js";
+import { resolveBrowserExecutable } from "./runtimeConfig.js";
+import { ArtifactWriter } from "./storage/artifacts.js";
+import type { BrowserArtifactWriter } from "./engines/browserSessionTypes.js";
+import type { AccountRun, PaymentDiscoveryCheckpoint, SelectorEvidence } from "../shared/types.js";
+const idSchema = z.string().trim().min(1).max(128); const emptySchema = z.undefined(); const recordSchema = z.record(z.string(), z.unknown());
+const addAccountSchema = z.object({ id: idSchema.optional(), label: z.string().optional(), eplusEmail: z.string().email(), password: z.string().min(1), mailProviderId: z.string().optional(), mailConfig: recordSchema.optional(), tags: z.array(z.string()).optional(), enabled: z.boolean().optional() }).strict();
+const importAccountsSchema = z.object({ kind: z.enum(["csv", "json"]), text: z.string().min(1) }).strict(); const discoverEventSchema = z.object({ sourceUrl: z.string().url() }).strict();
+const eventSnapshotSchema = z.object({ sourceUrl: z.string().url(), canonicalUrl: z.string().url().optional(), title: z.string().min(1), venue: z.string().optional(), scheduleText: z.string().optional(), applicationDeadline: z.string().optional(), pageFingerprint: z.string().optional(), rawFormSchemaJson: z.string().optional() }).strict();
 const preferenceEntrySchema = z.object({ rank: z.number(), ticketTypeId: z.string(), quantity: z.number(), optionalDateOrShowId: z.string().optional() }).strict();
-const preferenceSchema = z.object({
-  entries: z.array(preferenceEntrySchema), paymentMethodId: z.string(), deliveryMethodId: z.string().optional(), serialCode: z.string().optional(),
-  serialCodesByAccountId: z.record(z.string(), z.string()).optional(), daySelectionByAccountId: z.record(z.string(), z.array(z.enum(["day1", "day2"]))).optional(),
-  applicationLinkId: z.string().optional(), consentFlags: z.record(z.string(), z.boolean())
-}).strict();
-const taskSchema = z.object({ eventSnapshotId: idSchema, preference: preferenceSchema, accountIds: z.array(idSchema) }).strict();
-const taskV2Schema = taskSchema.extend({ confirmationPolicy: z.enum(["required", "disabled"]), automationRiskAcknowledgement: z.object({ version: z.number(), acknowledgedAt: z.string(), disclosureDigest: z.string() }).strict().optional() }).strict();
-const manualActionSchema = z.object({ runId: idSchema, action: z.enum(["continue", "cancel-account", "cancel-task", "reconcile-unknown"]), verificationCode: z.string().optional() }).strict();
-const pairSchema = z.object({ taskId: idSchema, runId: idSchema }).strict();
-const harvestSchema = z.object({ accountId: idSchema, existingSession: z.boolean().optional() }).strict();
-const mailboxSchema = z.object({
-  providerId: z.string(), mailboxAddress: z.string(), mode: z.enum(["manual", "imap", "http-api", "temp-mail-forwarder", "auth-mailbox"]), endpoint: z.string().optional(), username: z.string().optional(),
-  password: z.string().optional(), apiToken: z.string().optional(), senderAllowlist: z.array(z.string()), subjectMatchers: z.array(z.string()), pollingIntervalMs: z.number(), timeoutMs: z.number()
-}).strict();
-const verificationCodeSchema = z.object({ recipient: z.string().optional(), startedAt: z.string().optional(), timeoutMs: z.number().optional() }).strict().optional();
-const networkSchema = z.object({ host: z.string(), port: z.number(), secret: z.string().optional(), proxyGroup: z.string(), requiredCountry: z.string(), policy: z.string() }).strict();
-
+const serialPlanSchema = z.object({ code: z.string().trim().min(1), daySelection: z.array(z.enum(["day1", "day2"])).optional(), applicationLinkId: z.string().optional(), entries: z.array(preferenceEntrySchema).optional() }).strict();
+const preferenceSchema = z.object({ entries: z.array(preferenceEntrySchema), paymentMethodId: z.string().optional(), paymentPreference: z.object({ groupKey: idSchema, value: z.string().min(1).max(256) }).strict().optional(), deliveryMethodId: z.string().optional(), serialCode: z.string().optional(), serialCodesByAccountId: z.record(z.string(), z.string()).optional(), serialCodeAllocations: z.record(z.string(), z.array(serialPlanSchema)).optional(), daySelectionByAccountId: z.record(z.string(), z.array(z.enum(["day1", "day2"]))).optional(), applicationLinkId: z.string().optional(), consentFlags: z.record(z.string(), z.boolean()) }).strict();
+const taskSchema = z.object({ eventSnapshotId: idSchema, preference: preferenceSchema, accountIds: z.array(idSchema), deviceProfileKey: z.enum(["desktop-chrome", "iphone-13", "pixel-7"]).optional() }).strict(); const taskV2Schema = taskSchema.extend({ confirmationPolicy: z.enum(["required", "disabled"]), automationRiskAcknowledgement: z.object({ version: z.number(), acknowledgedAt: z.string(), disclosureDigest: z.string() }).strict().optional() }).strict();
+const manualActionSchema = z.object({ runId: idSchema, action: z.enum(["continue", "cancel-account", "cancel-task", "reconcile-unknown"]), verificationCode: z.string().optional() }).strict(); const pairSchema = z.object({ taskId: idSchema, runId: idSchema }).strict();
+const paymentSelectionSchema = z.object({ taskId: idSchema, runId: idSchema, checkpointId: idSchema, checkpointRevision: z.number().int().positive(), candidateIds: z.array(idSchema).min(1), expectedControlFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict(); const submissionDispatchSchema = z.object({ taskId: idSchema, runId: idSchema, authorizationRevision: z.number().int().positive(), nonce: z.string().uuid() }).strict();
+const harvestSchema = z.object({ accountId: idSchema, existingSession: z.boolean().optional() }).strict(); const mailboxSchema = z.object({ providerId: z.string(), mailboxAddress: z.string(), mode: z.enum(["manual", "imap", "http-api", "temp-mail-forwarder", "auth-mailbox", "cerise-bouquet"]), endpoint: z.string().optional(), username: z.string().optional(), password: z.string().optional(), apiToken: z.string().optional(), senderAllowlist: z.array(z.string()), subjectMatchers: z.array(z.string()), pollingIntervalMs: z.number(), timeoutMs: z.number() }).strict(); const verificationCodeSchema = z.object({ recipient: z.string().optional(), startedAt: z.string().optional(), timeoutMs: z.number().optional() }).strict().optional(); const networkSchema = z.object({ controller: z.enum(["clash", "sing-box"]), host: z.string(), port: z.number(), secret: z.string().optional(), proxyGroup: z.string(), proxyGroups: z.array(z.string()).optional(), requiredCountry: z.string(), policy: z.string() }).strict(); const networkImportSchema = z.object({ controller: z.enum(["clash", "sing-box"]), text: z.string().min(1) }).strict();
 type Handler<T> = (value: T) => unknown | Promise<unknown>;
-
-export function validateSender(event: IpcMainInvokeEvent, window: BrowserWindow): void {
-  if (!event.senderFrame || event.senderFrame.url !== event.sender.getURL() || event.sender !== window.webContents) {
-    throw new Error("Unauthorized IPC sender.");
-  }
-}
-
-function sanitizedError(error: unknown): Error {
-  if (error instanceof z.ZodError) return new Error("Invalid IPC payload.");
-  if (error instanceof Error) return new Error(error.message.replace(/[A-Za-z]:\\[^\n ]+|\/[^\n ]+/g, "[redacted]").slice(0, 500));
-  return new Error("Handler failed.");
-}
-
-function registerHandler<T>(channel: string, window: BrowserWindow, schema: z.ZodType<T>, handler: Handler<T>): void {
-  ipcMain.handle(channel, async (event, payload: unknown) => {
-    validateSender(event, window);
-    try {
-      return await handler(schema.parse(payload));
-    } catch (error) {
-      throw sanitizedError(error);
-    }
-  });
-}
-
+function redactSelectorEvidence(evidence: SelectorEvidence): SelectorEvidence { return { scope: evidence.scope, tag: evidence.tag, groupOrdinal: evidence.groupOrdinal, optionOrdinal: evidence.optionOrdinal, allowedAttributes: {}, contextGeneration: "redacted" }; }
+function sanitizePaymentCheckpointForRenderer(checkpoint: PaymentDiscoveryCheckpoint): PaymentDiscoveryCheckpoint { return { ...checkpoint, contextGeneration: "redacted", groups: checkpoint.groups.map((group) => ({ ...group, selectorEvidence: redactSelectorEvidence(group.selectorEvidence), options: group.options.map((option) => ({ ...option, domValue: "", selectorEvidence: redactSelectorEvidence(option.selectorEvidence) })) })) }; }
+function hydratePaymentCandidates(runs: AccountRun[], db: AppDatabase): AccountRun[] { return runs.map((run) => { if (run.paymentState !== "PaymentSelectionPending") return run; const checkpoint = db.getPaymentCheckpoint(run.id); return checkpoint ? { ...run, paymentCheckpoint: sanitizePaymentCheckpointForRenderer(checkpoint) } : run; }); }
+export function validateSender(event: IpcMainInvokeEvent, window: BrowserWindow): void { if (!event.senderFrame || event.senderFrame.url !== event.sender.getURL() || event.sender !== window.webContents) throw new Error("Unauthorized IPC sender."); }
+function sanitizedError(error: unknown): Error { if (error instanceof z.ZodError) return new Error("Invalid IPC payload."); if (error instanceof Error) return new Error(error.message.replace(/[A-Za-z]:\\[^\n ]+|\/[^^\n ]+/g, "[redacted]").slice(0, 500)); return new Error("Handler failed."); }
+function registerHandler<T>(channel: string, window: BrowserWindow, schema: z.ZodType<T>, handler: Handler<T>): void { ipcMain.handle(channel, async (event, payload: unknown) => { validateSender(event, window); try { return await handler(schema.parse(payload)); } catch (error) { throw sanitizedError(error); } }); }
 export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore: SecretStore): void {
-  const accountService = new AccountService(db, secretStore);
-  const eventService = new EventService(db);
-  const settingsService = new SettingsService(db, secretStore);
-  const taskService = new TaskService(db);
-  const network = new NetworkService({
-    detectIp: async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); return new ClashControllerProvider(config).detectIp(); },
-    rotate: async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); await new ClashControllerProvider(config).rotate(); }
-  }, { getSetting: (key) => db.getSetting(key) });
-  const browserEngine = new BrowserSessionEngine({ executablePath: process.env.EPLUS_BROWSER_EXECUTABLE ?? process.execPath, profilesDir: path.join(db.getDataDir(), "profiles"), navigationTimeoutMs: 30_000, retryLimit: 1, retryDelayMs: 500 }, { captureScreenshot: async () => ({}), captureHtmlSnapshot: async () => ({}) }, network);
-  const browserAdapter = new EplusBrowserAdapter(browserEngine);
-  const queueService = new QueueService(new LotteryOrchestrator(browserEngine, browserAdapter, network, db, {}, (cipher) => secretStore.decryptString(cipher)), db);
-  const profileHarvester = new ProfileHarvester(browserEngine, browserAdapter, db);
-  const recordRefresh = new RecordRefreshService(browserEngine, browserAdapter, db);
+  const accountService = new AccountService(db, secretStore); const eventService = new EventService(db); const settingsService = new SettingsService(db, secretStore); const taskService = new TaskService(db);
+  const network = new NetworkService({ detectIp: async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); return new ClashControllerProvider(config).detectIp(); }, rotate: async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); await new ClashControllerProvider(config).rotate(); } }, { getSetting: (key) => db.getSetting(key) });
+  const browserEngine = new BrowserSessionEngine({ executablePath: resolveBrowserExecutable(), profilesDir: path.join(db.getDataDir(), "profiles"), artifactDir: path.join(db.getDataDir(), "artifacts"), navigationTimeoutMs: 30_000, retryLimit: 1, retryDelayMs: 500 }, createArtifactWriter(db), network); const browserAdapter = new EplusBrowserAdapter(browserEngine); const mailAttribution = { readCode: async ({ accountId, startedAt }: { accountId: string; startedAt: string }) => { const account = db.getStoredAccount(accountId); const result = await settingsService.readVerificationCode({ recipient: account?.eplusEmail, startedAt }); return { code: result.code, manualActionRequired: result.manualActionRequired }; }, waitForApplicationConfirmation: async ({ accountId, startedAt }: { accountId: string; startedAt: string }) => { const account = db.getStoredAccount(accountId); const result = await settingsService.waitForApplicationConfirmation({ recipient: account?.eplusEmail, startedAt }); return { confirmed: result.confirmed, reason: result.reason }; } }; const submissionGuard = new SubmissionGuard(db, "pending-device-registry-digest"); const orchestrator = new LotteryOrchestrator(browserEngine, browserAdapter, network, db, mailAttribution, (cipher) => secretStore.decryptString(cipher), submissionGuard); const profileHarvester = new ProfileHarvester(browserEngine, browserAdapter, db, (cipher) => secretStore.decryptString(cipher), mailAttribution); const queueService = new QueueService(orchestrator, db, submissionGuard, async (accountId, runId) => { const harvest = await profileHarvester.refreshProfile(accountId); try { if (harvest.status === "AwaitingManualAction") db.addLog({ level: "warn", message: "profile.auto-harvest.manual-required", accountRunId: runId, metadata: { accountId, harvestRunId: harvest.runId } }); if (harvest.status === "Failed") throw new Error(harvest.errorDetail ?? "Profile harvest failed."); } finally { await browserEngine.close(); } }); const recordRefresh = new RecordRefreshService(browserEngine, browserAdapter, db, (cipher) => secretStore.decryptString(cipher), mailAttribution);
+  registerHandler("app:get-state", window, emptySchema, () => ({ accounts: accountService.listAccounts(), events: eventService.listEvents(), tasks: taskService.listTasks(), runs: hydratePaymentCandidates(taskService.listRuns(), db), logs: db.listLogs(), verificationMailbox: settingsService.getVerificationMailbox(), network: settingsService.getNetworkSettings(), dataDir: db.getDataDir() })); registerHandler("account:add", window, addAccountSchema, (input) => accountService.addAccount(input)); registerHandler("account:import", window, importAccountsSchema, (input) => accountService.importAccounts(input.kind, input.text)); registerHandler("account:delete", window, idSchema, (id) => accountService.deleteAccount(id));
+  ipcMain.handle("account:reveal-password", async (event, payload: unknown) => { validateSender(event, window); try { const id = idSchema.parse(payload); return accountService.revealPassword(id, String(event.sender.id)); } catch (error) { throw sanitizedError(error); } }); registerHandler("profile:harvest", window, harvestSchema, (input) => profileHarvester.harvest(input)); registerHandler("profile:refresh", window, idSchema, (id) => profileHarvester.refreshProfile(id)); registerHandler("profile:refresh-application-records", window, idSchema, (id) => recordRefresh.refreshApplicationRecords(id)); registerHandler("profile:refresh-lottery-results", window, idSchema, (id) => recordRefresh.refreshLotteryResults(id)); registerHandler("event:discover", window, discoverEventSchema, (input) => eventService.discoverFromUrl(input.sourceUrl)); registerHandler("event:save", window, eventSnapshotSchema, (input) => eventService.saveSnapshot(input));
+  registerHandler("task:create", window, taskSchema, (input) => { const event = db.getEvent(input.eventSnapshotId); if (!event) throw new Error("Event snapshot not found."); return taskService.createTask({ ...input, canonicalUrl: event.canonicalUrl }); }); registerHandler("task:create-v2", window, taskV2Schema, (input) => { const event = db.getEvent(input.eventSnapshotId); if (!event) throw new Error("Event snapshot not found."); return taskService.createTaskV2({ ...input, event }); }); registerHandler("run:manual-action", window, manualActionSchema, (input) => queueService.performManualAction(input)); registerHandler("run:retry-email-code", window, idSchema, (runId) => queueService.retryEmailCode(runId)); registerHandler("run:select-payment-options", window, paymentSelectionSchema, async (input) => { const authorization = submissionGuard.select(input, 1); await queueService.resumeSelectedPayment(input.runId); return authorization; }); registerHandler("run:dispatch-submission", window, submissionDispatchSchema, async (input) => { const run = await orchestrator.dispatchFinal(input); if (run.status === "Submitted") await queueService.finalizeDispatchedRun(input.runId); }); registerHandler("run:await-completion-email", window, idSchema, async (runId) => { const run = await orchestrator.awaitCompletionEmail(runId); if (run.status === "Submitted") await queueService.finalizeDispatchedRun(runId); return run; });
+  registerHandler("queue:enqueue-task", window, idSchema, async (taskId) => { const task = db.listTasks().find((candidate) => candidate.id === taskId); if (!task) throw new Error("Task not found."); if (task.status === "AwaitingConfirmation" || task.status === "Failed") taskService.updateTaskStatus(task.id, "Queued"); await queueService.enqueueTask(db.listTasks().find((candidate) => candidate.id === taskId) ?? task); }); registerHandler("queue:pause", window, emptySchema, () => queueService.pause()); registerHandler("queue:resume", window, emptySchema, () => queueService.resume()); registerHandler("queue:cancel-run", window, idSchema, (runId) => queueService.cancelRun(runId)); registerHandler("queue:cancel-task", window, idSchema, (taskId) => queueService.cancelTask(taskId)); registerHandler("queue:get-state", window, emptySchema, () => queueService.getState()); registerHandler("submission:get-authorization", window, pairSchema, (input) => { const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId); return run ? db.getSubmissionAuthorization(run.id) ?? null : null; });
+  registerHandler("submission:recover", window, pairSchema, (input) => { const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId); if (!run || run.status !== "Submitting") throw new Error("Only a submitting run can be recovered."); return orchestrator.recoverSubmittingRun(run.id); }); registerHandler("submission:reconcile", window, pairSchema, (input) => { const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId); if (!run || run.status !== "UnknownSubmissionState") throw new Error("Only an unknown submission can be reconciled."); const task = db.listTasks().find((candidate) => candidate.id === input.taskId); if (!task) throw new Error("Task not found."); const event = db.getEvent(task.eventSnapshotId); const historyMatch = event && db.listApplicationRecords(run.accountId).some((record) => record.eventTitle === event.title); if (historyMatch) { db.updateRun({ id: run.id, status: "AlreadyApplied" }); return "AlreadyApplied"; } db.updateRun({ id: run.id, status: "Failed", errorDetailRedacted: "No receipt or history was found during read-only reconciliation." }); return "Failed"; }); registerHandler("profile:get", window, idSchema, (accountId) => db.getProfile(accountId)); registerHandler("profile:list-companions", window, idSchema, (accountId) => db.getProfile(accountId)?.companions ?? []); registerHandler("profile:list-application-records", window, idSchema, (accountId) => db.listApplicationRecords(accountId)); registerHandler("profile:list-lottery-results", window, idSchema, (accountId) => db.listLotteryResults(accountId)); registerHandler("settings:save-verification-mailbox", window, mailboxSchema, (input) => settingsService.saveVerificationMailbox(input)); registerHandler("settings:test-verification-mailbox", window, emptySchema, () => settingsService.testVerificationMailbox()); registerHandler("settings:read-verification-code", window, verificationCodeSchema, (input) => settingsService.readVerificationCode(input)); registerHandler("settings:get-network", window, emptySchema, () => settingsService.getNetworkSettings()); registerHandler("settings:save-network", window, networkSchema, (input) => settingsService.saveNetworkSettings(input)); registerHandler("settings:import-network", window, networkImportSchema, (input) => settingsService.importNetworkConfig(input)); registerHandler("network:detect", window, emptySchema, async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); return new ClashControllerProvider(config).detectIp(); }); registerHandler("network:rotate", window, emptySchema, async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); await new ClashControllerProvider(config).rotate(); }); registerHandler("network:list-nodes", window, emptySchema, async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); const provider = new ClashControllerProvider(config); return await provider.listNodes?.() ?? []; }); registerHandler("network:select-node", window, idSchema, async (name) => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); const provider = new ClashControllerProvider(config); await provider.selectNode?.(name); }); registerHandler("app:open-data-folder", window, emptySchema, () => shell.openPath(path.resolve(db.getDataDir()))); window.webContents.once("did-finish-load", () => { db.addLog({ level: "info", message: "Renderer loaded.", metadata: {} }); });
+}
 
-  registerHandler("app:get-state", window, emptySchema, () => ({ accounts: accountService.listAccounts(), events: eventService.listEvents(), tasks: taskService.listTasks(), runs: taskService.listRuns(), logs: db.listLogs(), verificationMailbox: settingsService.getVerificationMailbox(), network: settingsService.getNetworkSettings(), dataDir: db.getDataDir() }));
-  registerHandler("account:add", window, addAccountSchema, (input) => accountService.addAccount(input));
-  registerHandler("account:import", window, importAccountsSchema, (input) => accountService.importAccounts(input.kind, input.text));
-  registerHandler("account:delete", window, idSchema, (id) => accountService.deleteAccount(id));
-  ipcMain.handle("account:reveal-password", async (event, payload: unknown) => {
-    validateSender(event, window);
-    try {
-      const id = idSchema.parse(payload);
-      return accountService.revealPassword(id, String(event.sender.id));
-    } catch (error) {
-      throw sanitizedError(error);
+function createArtifactWriter(db: AppDatabase): BrowserArtifactWriter {
+  const artifactDir = path.join(db.getDataDir(), "artifacts");
+  const writerFor = (manifestId: string) => {
+    const separator = manifestId.lastIndexOf(":");
+    const runId = separator > 0 ? manifestId.slice(0, separator) : "session";
+    const stepId = separator > 0 ? manifestId.slice(separator + 1) : manifestId;
+    return { runId, stepId, writer: new ArtifactWriter({ accountRunId: runId, stepId, artifactDir, maskSelectors: [], knownAccountValues: [] }) };
+  };
+  return {
+    captureScreenshot: async (page, manifestId) => {
+      const { runId, stepId, writer } = writerFor(manifestId);
+      const entry = await writer.captureScreenshot(page, manifestId.replace(/[^a-zA-Z0-9_-]/g, "-"));
+      db.addArtifactManifest({ id: `${manifestId}:screenshot`, runId, stepId, kind: "screenshot", filePath: entry.filePath, maskedSelectors: [], createdAt: new Date().toISOString() });
+      return entry;
+    },
+    captureHtmlSnapshot: async (html, manifestId) => {
+      const { runId, stepId, writer } = writerFor(manifestId);
+      const entry = await writer.captureHtmlSnapshot(html, manifestId.replace(/[^a-zA-Z0-9_-]/g, "-"));
+      db.addArtifactManifest({ id: `${manifestId}:html`, runId, stepId, kind: "html-snapshot", filePath: entry.filePath, maskedSelectors: [], createdAt: new Date().toISOString() });
+      return entry;
     }
-  });
-  registerHandler("profile:harvest", window, harvestSchema, (input) => profileHarvester.harvest(input));
-  registerHandler("profile:refresh", window, idSchema, (id) => profileHarvester.refreshProfile(id));
-  registerHandler("profile:refresh-application-records", window, idSchema, (id) => recordRefresh.refreshApplicationRecords(id));
-  registerHandler("profile:refresh-lottery-results", window, idSchema, (id) => recordRefresh.refreshLotteryResults(id));
-  registerHandler("event:discover", window, discoverEventSchema, (input) => eventService.discoverFromUrl(input.sourceUrl));
-  registerHandler("event:save", window, eventSnapshotSchema, (input) => eventService.saveSnapshot(input));
-  registerHandler("task:create", window, taskSchema, (input) => {
-    const event = db.getEvent(input.eventSnapshotId); if (!event) throw new Error("Event snapshot not found.");
-    if (event.rawFormSchema.serialCode?.required) { const commonCode = String(input.preference.serialCode ?? "").trim(); const codes = input.preference.serialCodesByAccountId ?? {}; if (input.accountIds.some((accountId) => !commonCode && !codes[accountId])) throw new Error("Required serial code is missing."); }
-    return taskService.createTask({ ...input, canonicalUrl: event.canonicalUrl });
-  });
-  registerHandler("task:create-v2", window, taskV2Schema, (input) => { const event = db.getEvent(input.eventSnapshotId); if (!event) throw new Error("Event snapshot not found."); return taskService.createTaskV2({ ...input, event }); });
-  registerHandler("run:manual-action", window, manualActionSchema, (input) => queueService.performManualAction(input));
-  registerHandler("queue:enqueue-task", window, idSchema, async (taskId) => { const task = db.listTasks().find((candidate) => candidate.id === taskId); if (!task) throw new Error("Task not found."); if (task.status === "AwaitingConfirmation" || task.status === "Failed") taskService.updateTaskStatus(task.id, "Queued"); await queueService.enqueueTask(db.listTasks().find((candidate) => candidate.id === taskId) ?? task); });
-  registerHandler("queue:pause", window, emptySchema, () => queueService.pause());
-  registerHandler("queue:resume", window, emptySchema, () => queueService.resume());
-  registerHandler("queue:cancel-run", window, idSchema, (runId) => queueService.cancelRun(runId));
-  registerHandler("queue:cancel-task", window, idSchema, (taskId) => queueService.cancelTask(taskId));
-  registerHandler("queue:get-state", window, emptySchema, () => queueService.getState());
-  registerHandler("submission:get-authorization", window, pairSchema, (input) => { const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId); return run ? db.getSubmissionAuthorization(run.id) ?? null : null; });
-  registerHandler("submission:reconcile", window, pairSchema, (input) => { const run = db.listRuns().find((candidate) => candidate.id === input.runId && candidate.taskId === input.taskId); if (!run || run.status !== "UnknownSubmissionState") throw new Error("Only an unknown submission can be reconciled."); const task = db.listTasks().find((candidate) => candidate.id === input.taskId); if (!task) throw new Error("Task not found."); const event = db.getEvent(task.eventSnapshotId); const historyMatch = event && db.listApplicationRecords(run.accountId).some((record) => record.eventTitle === event.title); if (historyMatch) { db.updateRun({ id: run.id, status: "AlreadyApplied" }); return "AlreadyApplied"; } db.updateRun({ id: run.id, status: "Failed", errorDetailRedacted: "No receipt or history was found during read-only reconciliation." }); return "Failed"; });
-  registerHandler("profile:get", window, idSchema, (accountId) => db.getProfile(accountId));
-  registerHandler("profile:list-companions", window, idSchema, (accountId) => db.getProfile(accountId)?.companions ?? []);
-  registerHandler("profile:list-application-records", window, idSchema, (accountId) => db.listApplicationRecords(accountId));
-  registerHandler("profile:list-lottery-results", window, idSchema, (accountId) => db.listLotteryResults(accountId));
-  registerHandler("settings:save-verification-mailbox", window, mailboxSchema, (input) => settingsService.saveVerificationMailbox(input));
-  registerHandler("settings:test-verification-mailbox", window, emptySchema, () => settingsService.testVerificationMailbox());
-  registerHandler("settings:read-verification-code", window, verificationCodeSchema, (input) => settingsService.readVerificationCode(input));
-  registerHandler("settings:get-network", window, emptySchema, () => settingsService.getNetworkSettings());
-  registerHandler("settings:save-network", window, networkSchema, (input) => settingsService.saveNetworkSettings(input));
-  registerHandler("network:detect", window, emptySchema, async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); return new ClashControllerProvider(config).detectIp(); });
-  registerHandler("network:rotate", window, emptySchema, async () => { const config = settingsService.getClashConfig(); if (!config) throw new Error("Network controller is not configured."); await new ClashControllerProvider(config).rotate(); });
-  registerHandler("app:open-data-folder", window, emptySchema, () => shell.openPath(path.resolve(db.getDataDir())));
-  window.webContents.once("did-finish-load", () => { db.addLog({ level: "info", message: "Renderer loaded.", metadata: {} }); });
+  };
 }

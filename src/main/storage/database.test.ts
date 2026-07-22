@@ -20,7 +20,7 @@ describe("AppDatabase migrations", () => {
     const database = new AppDatabase(directory, dbFile);
     await database.open();
 
-    expect(database.getSetting<number>("schema_version")).toBe(4);
+    expect(database.getSetting<number>("schema_version")).toBe(9);
     expect(database.listAccounts()).toHaveLength(1);
     expect(database.listAccounts()[0]?.eplusEmail).toBe("saved@example.test");
     expect(await hasTable(dbFile, "artifact_manifests")).toBe(true);
@@ -54,7 +54,7 @@ describe("AppDatabase storage primitives", () => {
     const database = await openDatabase();
     const account = database.upsertAccount({ eplusEmail: "person@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
     const now = "2026-07-21T00:00:00.000Z";
-    database.upsertProfile({ accountId: account.id, eplusEmail: account.eplusEmail, encryptedPassword: "encrypted", revealSupported: true, phone: "08012345678", name: "山田太郎", companions: [{ name: "Companion" }], pastCompanions: [], harvestedAt: now, harvestStatus: "Ok" });
+    database.upsertProfile({ accountId: account.id, eplusEmail: account.eplusEmail, encryptedPassword: "encrypted", revealSupported: true, phone: "08012345678", name: "山田太郎", creditCards: [{ brand: "Visa", last4: "1234" }], companions: [{ name: "Companion" }], pastCompanions: [], harvestedAt: now, harvestStatus: "Ok" });
     database.addApplicationRecord({ id: "application", accountId: account.id, eventTitle: "Event", appliedAt: now, ticketType: "General", quantity: 2, applicationId: "EP2024123400012345", status: "Pending", harvestedAt: now });
     database.addLotteryResult({ id: "result", accountId: account.id, eventTitle: "Event", resultKind: "中選", applicationId: "EP2024123400012345", harvestedAt: now });
     database.createProfileHarvestRun({ id: "harvest", accountId: account.id, status: "Pending", harvestedFields: [], startedAt: now });
@@ -66,6 +66,7 @@ describe("AppDatabase storage primitives", () => {
     database.addArtifactManifest({ id: "artifact", runId: run.id, stepId: "step", kind: "html-snapshot", filePath: "opaque.html", maskedSelectors: [".secret"], createdAt: now });
 
     expect(database.getProfile(account.id)?.name).toBe("山田太郎");
+    expect(database.getProfile(account.id)?.creditCards).toEqual([{ brand: "Visa", last4: "1234" }]);
     expect(database.listApplicationRecords(account.id)).toHaveLength(1);
     expect(database.listLotteryResults(account.id)).toHaveLength(1);
     expect(database.consumeRevealSession("request", "window")?.consumed).toBe(true);
@@ -87,6 +88,68 @@ describe("AppDatabase storage primitives", () => {
     expect(() => database.createTask({ id: "task", eventSnapshotId: "event", preference: { entries: [], paymentMethodId: "card", consentFlags: {} }, accountIds: [account.id, "missing-account"], status: "AwaitingConfirmation", confirmationDigest: "digest", createdAt: now, updatedAt: now })).toThrow();
     expect(database.listTasks()).toHaveLength(0);
     expect(database.listRuns()).toHaveLength(0);
+  });
+
+  it("reads legacy task JSON and defaults legacy run payment state", async () => {
+    const database = await openDatabase();
+    const account = database.upsertAccount({ id: "account", eplusEmail: "person@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
+    const now = "2026-07-21T00:00:00.000Z";
+    database.createTask({ id: "legacy", eventSnapshotId: "event", preference: { entries: [], paymentMethodId: "store", consentFlags: {} }, accountIds: [account.id], status: "AwaitingConfirmation", confirmationDigest: "digest", createdAt: now, updatedAt: now });
+
+    expect(database.listTasks()[0]?.preference.paymentMethodId).toBe("store");
+    expect(database.listRunsForTask("legacy")[0]?.paymentState).toBe("Idle");
+  });
+
+  it("persists a new task without a legacy payment ID and enforces run payment-state bindings", async () => {
+    const database = await openDatabase();
+    const account = database.upsertAccount({ id: "account", eplusEmail: "new@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
+    const now = "2026-07-21T00:00:00.000Z";
+    database.createTask({ id: "new-task", eventSnapshotId: "event", preference: { entries: [], paymentPreference: { groupKey: "payment", value: "store" }, consentFlags: {} }, accountIds: [account.id], status: "AwaitingConfirmation", confirmationDigest: "digest", deviceProfileKey: "iphone-13", createdAt: now, updatedAt: now });
+
+    const task = database.listTasks()[0];
+    const run = database.listRunsForTask("new-task")[0];
+    expect(task?.preference.paymentMethodId).toBeUndefined();
+    expect(task?.preference.paymentPreference).toEqual({ groupKey: "payment", value: "store" });
+    expect(task?.deviceProfileKey).toBe("iphone-13");
+    expect(run?.status).toBe("Pending");
+    expect(run?.paymentState).toBe("Idle");
+    if (!run) throw new Error("Expected account run.");
+    database.updateRun({ id: run.id, status: "FillingForm" });
+    expect(database.listRunsForTask("new-task")[0]?.paymentState).toBe("PaymentDiscoveryPending");
+    expect(() => database.updateRun({ id: run.id, status: "Submitting", paymentState: "PaymentSelectionApplied" })).toThrow("not valid");
+  });
+
+  it("expands a two-day serial plan into two independent browser runs", async () => {
+    const database = await openDatabase();
+    const account = database.upsertAccount({ id: "serial-account", eplusEmail: "serial@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
+    const now = "2026-07-21T00:00:00.000Z";
+    database.createTask({
+      id: "serial-task",
+      eventSnapshotId: "event",
+      preference: {
+        entries: [],
+        consentFlags: {},
+        serialCodeAllocations: {
+          [account.id]: [
+            { code: "CODE-BOTH", daySelection: ["day1", "day2"] },
+            { code: "CODE-ONE", daySelection: ["day1"] }
+          ]
+        }
+      },
+      accountIds: [account.id],
+      status: "AwaitingConfirmation",
+      confirmationDigest: "digest",
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const runs = database.listRunsForTask("serial-task");
+    expect(runs).toHaveLength(3);
+    expect(runs.map((run) => [run.serialCode, run.serialPlan?.daySelection])).toEqual([
+      ["CODE-BOTH", ["day1"]],
+      ["CODE-BOTH", ["day2"]],
+      ["CODE-ONE", ["day1"]]
+    ]);
   });
 });
 

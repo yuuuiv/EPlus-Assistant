@@ -7,7 +7,14 @@ export function createPlaywrightArtifactPage(page: Page): ArtifactPage {
     prepareForArtifact: async ({ maskSelectors, knownAccountValues }) => {
       await page.evaluate(
         ({ selectors, values }) => {
-          for (const selector of selectors) {
+          const safeSelectors = [
+            ...selectors,
+            "input[type='password']",
+            "input[autocomplete='cc-number']",
+            "input[autocomplete='cc-csc']",
+            "input[name*='cvv' i]"
+          ];
+          for (const selector of safeSelectors) {
             for (const element of Array.from(document.querySelectorAll(selector))) {
               (element as HTMLElement).style.visibility = "hidden";
             }

@@ -19,8 +19,14 @@ import type {
   TaskStatus,
   SubmissionAuthorization,
   SubmissionIntent,
-  SubmissionIntentStatus
+  SubmissionIntentStatus,
+  PaymentRunState,
+  PaymentDiscoveryCheckpoint,
+  PaymentSelection,
+  DispatchLease,
+  RecoveryFence
 } from "../../shared/types.js";
+import { assertPaymentStateForRun } from "../../core/stateMachine.js";
 
 type SqlValue = string | number | Uint8Array | null;
 type Row = Record<string, string | number | null>;
@@ -95,6 +101,44 @@ const MIGRATIONS: ReadonlyArray<{ readonly version: number; readonly sql: string
       create table if not exists submission_authorizations (run_id text primary key, authorization_json text not null, created_at text not null, foreign key(run_id) references account_runs(id) on delete cascade);
       create table if not exists submission_intents (run_id text primary key, intent_json text not null, foreign key(run_id) references account_runs(id) on delete cascade);
     `
+  },
+  {
+    version: 5,
+    sql: `
+      alter table account_runs add column payment_state text not null default 'Idle';
+      alter table lottery_tasks add column device_profile_key text;
+    `
+  }
+  ,
+  {
+    version: 6,
+    sql: `
+      create table if not exists payment_checkpoints (run_id text primary key, checkpoint_json text not null, foreign key(run_id) references account_runs(id) on delete cascade);
+      create table if not exists payment_selections (run_id text primary key, selection_json text not null, foreign key(run_id) references account_runs(id) on delete cascade);
+      create table if not exists dispatch_leases (run_id text primary key, lease_json text not null, foreign key(run_id) references account_runs(id) on delete cascade);
+      create table if not exists recovery_fences (run_id text primary key, fence_json text not null, foreign key(run_id) references account_runs(id) on delete cascade);
+    `
+  }
+  ,
+  {
+    version: 7,
+    sql: `
+      alter table account_profiles add column credit_cards_json text not null default '[]';
+    `
+  }
+  ,
+  {
+    version: 8,
+    sql: `
+      alter table account_runs add column serial_code text;
+    `
+  }
+  ,
+  {
+    version: 9,
+    sql: `
+      alter table account_runs add column serial_plan_json text;
+    `
   }
 ];
 
@@ -134,21 +178,29 @@ export class AppDatabase {
   listEvents(): EventSnapshot[] { return this.query<Row>("select * from event_snapshots order by fetched_at desc").map((row) => ({ id: text(row.id), sourceUrl: text(row.source_url), canonicalUrl: text(row.canonical_url), title: text(row.title), venue: optional(row.venue), scheduleText: optional(row.schedule_text), applicationDeadline: optional(row.application_deadline), fetchedAt: text(row.fetched_at), rawFormSchema: JSON.parse(text(row.raw_form_schema_json)), pageFingerprint: text(row.page_fingerprint) })); }
   getEvent(id: string): EventSnapshot | undefined { return this.listEvents().find((event) => event.id === id); }
 
-  createTask(task: LotteryTask): LotteryTask { this.inTransaction(() => { this.run(`insert into lottery_tasks (id,event_snapshot_id,preference_json,account_ids_json,status,confirmation_digest,created_at,updated_at) values (?,?,?,?,?,?,?,?)`, [task.id,task.eventSnapshotId,JSON.stringify(task.preference),JSON.stringify(task.accountIds),task.status,task.confirmationDigest,task.createdAt,task.updatedAt]); for (const accountId of task.accountIds) this.createRun({ id: randomUUID(),taskId: task.id,accountId,status: "Pending",resumeCheckpoint: {},createdAt: task.createdAt,updatedAt: task.createdAt }); }); return task; }
-  listTasks(): LotteryTask[] { return this.query<Row>("select * from lottery_tasks order by created_at desc").map((row) => ({ id:text(row.id),eventSnapshotId:text(row.event_snapshot_id),preference:JSON.parse(text(row.preference_json)),accountIds:JSON.parse(text(row.account_ids_json)),status:text(row.status) as TaskStatus,confirmationDigest:text(row.confirmation_digest),createdAt:text(row.created_at),updatedAt:text(row.updated_at) })); }
+  createTask(task: LotteryTask): LotteryTask { this.inTransaction(() => { this.run(`insert into lottery_tasks (id,event_snapshot_id,preference_json,account_ids_json,status,confirmation_digest,created_at,updated_at,device_profile_key) values (?,?,?,?,?,?,?,?,?)`, [task.id,task.eventSnapshotId,JSON.stringify(task.preference),JSON.stringify(task.accountIds),task.status,task.confirmationDigest,task.createdAt,task.updatedAt,task.deviceProfileKey ?? null]); const allocations = task.preference.serialCodeAllocations ?? {}; for (const accountId of task.accountIds) { const assigned = allocations[accountId]?.filter((plan) => plan.code.trim()).map((plan) => ({ ...plan, code: plan.code.trim() })) ?? []; const plans = assigned.length > 0 ? assigned : [{ code: task.preference.serialCodesByAccountId?.[accountId]?.trim() ?? task.preference.serialCode?.trim() ?? "", daySelection: task.preference.daySelectionByAccountId?.[accountId] }]; for (const serialPlan of plans) { const selectedDays = serialPlan.daySelection?.length ? serialPlan.daySelection : [undefined]; for (const day of selectedDays) { const runPlan = day ? { ...serialPlan, daySelection: [day] as Array<"day1" | "day2"> } : serialPlan; this.createRun({ id: randomUUID(),taskId: task.id,accountId,serialCode: serialPlan.code || undefined,serialPlan: serialPlan.code ? runPlan : undefined,status: "Pending",paymentState: "Idle",resumeCheckpoint: {},createdAt: task.createdAt,updatedAt: task.createdAt }); } } } }); return task; }
+  listTasks(): LotteryTask[] { return this.query<Row>("select * from lottery_tasks order by created_at desc").map((row) => ({ id:text(row.id),eventSnapshotId:text(row.event_snapshot_id),preference:JSON.parse(text(row.preference_json)),accountIds:JSON.parse(text(row.account_ids_json)),status:text(row.status) as TaskStatus,confirmationDigest:text(row.confirmation_digest),deviceProfileKey:optional(row.device_profile_key) as LotteryTask["deviceProfileKey"],createdAt:text(row.created_at),updatedAt:text(row.updated_at) })); }
   updateTaskStatus(id: string, status: TaskStatus): void { this.run("update lottery_tasks set status = ?, updated_at = ? where id = ?", [status,new Date().toISOString(),id]); }
   listRuns(): AccountRun[] { return this.query<Row>("select * from account_runs order by created_at asc").map(rowToRun); }
-  listRunsForTask(taskId: string): AccountRun[] { return this.query<Row>("select * from account_runs where task_id = ? order by created_at asc", [taskId]).map(rowToRun); }
-  updateRun(input: { id:string; status:AccountRunStatus; resumeCheckpoint?:Record<string,unknown>; externalApplicationId?:string; errorCode?:string; errorDetailRedacted?:string }): void { this.run("update account_runs set status=?,resume_checkpoint_json=coalesce(?,resume_checkpoint_json),external_application_id=coalesce(?,external_application_id),error_code=?,error_detail_redacted=?,updated_at=? where id=?", [input.status,input.resumeCheckpoint ? JSON.stringify(input.resumeCheckpoint) : null,input.externalApplicationId ?? null,input.errorCode ?? null,input.errorDetailRedacted ?? null,new Date().toISOString(),input.id]); }
+  listRunsForTask(taskId: string): AccountRun[] { return this.query<Row>("select * from account_runs where task_id = ? order by created_at asc, rowid asc", [taskId]).map(rowToRun); }
+  updateRun(input: { id:string; status:AccountRunStatus; paymentState?:PaymentRunState; resumeCheckpoint?:Record<string,unknown>; externalApplicationId?:string; errorCode?:string; errorDetailRedacted?:string }): void { const current=this.listRuns().find((run) => run.id === input.id); if (!current) throw new Error("Account run not found."); const nextPaymentState=input.paymentState ?? ((input.status === "Pending" || input.status === "LoggingIn" || input.status === "AwaitingEmailCode") ? "Idle" : input.status === "FillingForm" && current.paymentState === "Idle" ? "PaymentDiscoveryPending" : input.status === "AwaitingSubmitConfirmation" && current.paymentState !== "PaymentSelectionApplied" ? "PaymentSelectionApplied" : current.paymentState); if (input.paymentState !== undefined) assertPaymentStateForRun(input.status,nextPaymentState); this.run("update account_runs set status=?,payment_state=?,resume_checkpoint_json=coalesce(?,resume_checkpoint_json),external_application_id=coalesce(?,external_application_id),error_code=?,error_detail_redacted=?,updated_at=? where id=?", [input.status,nextPaymentState,input.resumeCheckpoint ? JSON.stringify(input.resumeCheckpoint) : null,input.externalApplicationId ?? null,input.errorCode ?? null,input.errorDetailRedacted ?? null,new Date().toISOString(),input.id]); }
   saveSubmissionAuthorization(authorization: SubmissionAuthorization): SubmissionAuthorization { this.run("insert into submission_authorizations (run_id,authorization_json,created_at) values (?,?,?) on conflict(run_id) do update set authorization_json=excluded.authorization_json", [authorization.runId,JSON.stringify(authorization),authorization.createdAt]); return authorization; }
   getSubmissionAuthorization(runId: string): SubmissionAuthorization | undefined { const row=this.query<Row>("select authorization_json from submission_authorizations where run_id=?",[runId])[0]; return row ? JSON.parse(text(row.authorization_json)) as SubmissionAuthorization : undefined; }
-  consumeSubmissionAuthorization(runId: string): SubmissionAuthorization | undefined { const authorization=this.getSubmissionAuthorization(runId); if (!authorization || authorization.consumed || Date.parse(authorization.expiresAt) <= Date.now()) return undefined; const consumed={...authorization,consumed:true}; this.saveSubmissionAuthorization(consumed); return consumed; }
+  savePaymentCheckpoint(checkpoint: PaymentDiscoveryCheckpoint): PaymentDiscoveryCheckpoint { this.run("insert into payment_checkpoints (run_id,checkpoint_json) values (?,?) on conflict(run_id) do update set checkpoint_json=excluded.checkpoint_json", [checkpoint.runId, JSON.stringify(checkpoint)]); return checkpoint; }
+  getPaymentCheckpoint(runId: string): PaymentDiscoveryCheckpoint | undefined { const row=this.query<Row>("select checkpoint_json from payment_checkpoints where run_id=?", [runId])[0]; return row ? JSON.parse(text(row.checkpoint_json)) as PaymentDiscoveryCheckpoint : undefined; }
+  savePaymentSelections(runId: string, selections: PaymentSelection[]): PaymentSelection[] { this.run("insert into payment_selections (run_id,selection_json) values (?,?) on conflict(run_id) do update set selection_json=excluded.selection_json", [runId, JSON.stringify(selections)]); return selections; }
+  getPaymentSelections(runId: string): PaymentSelection[] | undefined { const row=this.query<Row>("select selection_json from payment_selections where run_id=?", [runId])[0]; return row ? JSON.parse(text(row.selection_json)) as PaymentSelection[] : undefined; }
+  saveDispatchLease(runId: string, lease: DispatchLease): DispatchLease { this.run("insert into dispatch_leases (run_id,lease_json) values (?,?) on conflict(run_id) do update set lease_json=excluded.lease_json", [runId, JSON.stringify(lease)]); return lease; }
+  getDispatchLease(runId: string): DispatchLease | undefined { const row=this.query<Row>("select lease_json from dispatch_leases where run_id=?", [runId])[0]; return row ? JSON.parse(text(row.lease_json)) as DispatchLease : undefined; }
+  saveRecoveryFence(fence: RecoveryFence): RecoveryFence { this.run("insert into recovery_fences (run_id,fence_json) values (?,?) on conflict(run_id) do update set fence_json=excluded.fence_json", [fence.runId, JSON.stringify(fence)]); return fence; }
+  getRecoveryFence(runId: string): RecoveryFence | undefined { const row=this.query<Row>("select fence_json from recovery_fences where run_id=?", [runId])[0]; return row ? JSON.parse(text(row.fence_json)) as RecoveryFence : undefined; }
+  withImmediateTransaction<T>(action: () => T): T { return this.inTransaction(action, "BEGIN IMMEDIATE"); }
   saveSubmissionIntent(intent: SubmissionIntent): SubmissionIntent { this.run("insert into submission_intents (run_id,intent_json) values (?,?) on conflict(run_id) do update set intent_json=excluded.intent_json",[intent.runId,JSON.stringify(intent)]); return intent; }
   getSubmissionIntent(runId: string): SubmissionIntent | undefined { const row=this.query<Row>("select intent_json from submission_intents where run_id=?",[runId])[0]; return row ? JSON.parse(text(row.intent_json)) as SubmissionIntent : undefined; }
   updateSubmissionIntent(runId: string, status: SubmissionIntentStatus, receiptApplicationId?: string): SubmissionIntent | undefined { const intent=this.getSubmissionIntent(runId); if (!intent) return undefined; return this.saveSubmissionIntent({...intent,status,receiptApplicationId: receiptApplicationId ?? intent.receiptApplicationId,updatedAt:new Date().toISOString()}); }
-  createRun(run: AccountRun): AccountRun { if (!this.getStoredAccount(run.accountId)) throw new Error("Account run requires an existing account."); this.run("insert into account_runs (id,task_id,account_id,status,external_application_id,resume_checkpoint_json,error_code,error_detail_redacted,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?)", [run.id,run.taskId,run.accountId,run.status,run.externalApplicationId ?? null,JSON.stringify(run.resumeCheckpoint),run.errorCode ?? null,run.errorDetailRedacted ?? null,run.createdAt,run.updatedAt]); return run; }
+  createRun(run: AccountRun): AccountRun { if (!this.getStoredAccount(run.accountId)) throw new Error("Account run requires an existing account."); this.run("insert into account_runs (id,task_id,account_id,serial_code,serial_plan_json,status,payment_state,external_application_id,resume_checkpoint_json,error_code,error_detail_redacted,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)", [run.id,run.taskId,run.accountId,run.serialCode ?? null,run.serialPlan ? JSON.stringify(run.serialPlan) : null,run.status,run.paymentState,run.externalApplicationId ?? null,JSON.stringify(run.resumeCheckpoint),run.errorCode ?? null,run.errorDetailRedacted ?? null,run.createdAt,run.updatedAt]); return run; }
 
-  upsertProfile(profile: AccountProfile): AccountProfile { const now = new Date().toISOString(); this.run(`insert into account_profiles (id,account_id,eplus_email,encrypted_password,reveal_supported,phone,name,gender,birthday,address,companions_json,past_companions_json,harvested_at,harvest_status,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id) do update set eplus_email=excluded.eplus_email,encrypted_password=excluded.encrypted_password,reveal_supported=excluded.reveal_supported,phone=excluded.phone,name=excluded.name,gender=excluded.gender,birthday=excluded.birthday,address=excluded.address,companions_json=excluded.companions_json,past_companions_json=excluded.past_companions_json,harvested_at=excluded.harvested_at,harvest_status=excluded.harvest_status,updated_at=excluded.updated_at`, [randomUUID(),profile.accountId,profile.eplusEmail,profile.encryptedPassword,profile.revealSupported ? 1 : 0,profile.phone ?? null,profile.name ?? null,profile.gender ?? null,profile.birthday ?? null,profile.address ?? null,JSON.stringify(profile.companions),JSON.stringify(profile.pastCompanions),profile.harvestedAt,profile.harvestStatus,now,now]); return profile; }
+  upsertProfile(profile: AccountProfile): AccountProfile { const now = new Date().toISOString(); this.run(`insert into account_profiles (id,account_id,eplus_email,encrypted_password,reveal_supported,phone,name,gender,birthday,address,credit_cards_json,companions_json,past_companions_json,harvested_at,harvest_status,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id) do update set eplus_email=excluded.eplus_email,encrypted_password=excluded.encrypted_password,reveal_supported=excluded.reveal_supported,phone=excluded.phone,name=excluded.name,gender=excluded.gender,birthday=excluded.birthday,address=excluded.address,credit_cards_json=excluded.credit_cards_json,companions_json=excluded.companions_json,past_companions_json=excluded.past_companions_json,harvested_at=excluded.harvested_at,harvest_status=excluded.harvest_status,updated_at=excluded.updated_at`, [randomUUID(),profile.accountId,profile.eplusEmail,profile.encryptedPassword,profile.revealSupported ? 1 : 0,profile.phone ?? null,profile.name ?? null,profile.gender ?? null,profile.birthday ?? null,profile.address ?? null,JSON.stringify(profile.creditCards ?? []),JSON.stringify(profile.companions),JSON.stringify(profile.pastCompanions),profile.harvestedAt,profile.harvestStatus,now,now]); return profile; }
   getProfile(accountId: string): AccountProfile | undefined { const row = this.query<Row>("select * from account_profiles where account_id=?",[accountId])[0]; return row ? rowToProfile(row) : undefined; }
   deleteProfile(accountId: string): void { this.run("delete from account_profiles where account_id=?",[accountId]); }
   addApplicationRecord(record: ApplicationRecord): ApplicationRecord { this.run("insert into application_records (id,account_id,event_title,applied_at,session_or_day,ticket_type,quantity,application_id,status,harvested_at,created_at) values (?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id,event_title,application_id) where application_id is not null do update set applied_at=excluded.applied_at,session_or_day=excluded.session_or_day,ticket_type=excluded.ticket_type,quantity=excluded.quantity,status=excluded.status,harvested_at=excluded.harvested_at",[record.id,record.accountId,record.eventTitle,record.appliedAt,record.sessionOrDay ?? null,record.ticketType,record.quantity,record.applicationId ?? null,record.status,record.harvestedAt,new Date().toISOString()]); return record; }
@@ -171,7 +223,7 @@ export class AppDatabase {
 
   private migrate(): void { this.runMigrations(this.hasTable("app_settings") ? this.getSetting<number>("schema_version") ?? 0 : 0); }
   private runMigrations(fromVersion: number): void { for (const migration of MIGRATIONS) if (migration.version > fromVersion) this.inTransaction(() => { this.beforeMigration?.(migration.version); this.exec(migration.sql); this.setSetting("schema_version",migration.version); }); }
-  private inTransaction(action: () => void): void { this.exec("BEGIN"); this.transactionDepth += 1; try { action(); this.exec("COMMIT"); } catch (error) { this.exec("ROLLBACK"); throw error; } finally { this.transactionDepth -= 1; } this.save(); }
+  private inTransaction<T>(action: () => T, begin = "BEGIN"): T { this.exec(begin); this.transactionDepth += 1; try { const value=action(); this.exec("COMMIT"); this.save(); return value; } catch (error) { this.exec("ROLLBACK"); throw error; } finally { this.transactionDepth -= 1; } }
   private exec(sql: string): void { this.assertOpen().exec(sql); }
   private run(sql: string, params: SqlValue[] = []): void { const statement=this.assertOpen().prepare(sql); try { statement.bind(params); statement.step(); } finally { statement.free(); } if (this.transactionDepth === 0) this.save(); }
   private query<T extends Record<string, unknown>>(sql: string, params: SqlValue[] = []): T[] { const statement=this.assertOpen().prepare(sql); const rows:T[]=[]; try { statement.bind(params); while(statement.step()) rows.push(statement.getAsObject() as T); } finally { statement.free(); } return rows; }
@@ -184,6 +236,6 @@ function text(value: string | number | null): string { return String(value ?? ""
 function optional(value: string | number | null): string | undefined { return value === null ? undefined : String(value); }
 function toAccount(row: AccountRow): Account { return {id:row.id,label:row.label,eplusEmail:row.eplus_email,mailProviderId:row.mail_provider_id,tags:JSON.parse(row.tags_json),enabled:Boolean(row.enabled),lastLoginAt:row.last_login_at ?? undefined,lastLoginStatus:row.last_login_status as Account["lastLoginStatus"],createdAt:row.created_at,updatedAt:row.updated_at}; }
 function toStoredAccount(row: AccountRow): StoredAccount { return {...toAccount(row),encryptedEplusPassword:row.encrypted_eplus_password,encryptedMailConfig:row.encrypted_mail_config}; }
-function rowToRun(row: Row): AccountRun { return {id:text(row.id),taskId:text(row.task_id),accountId:text(row.account_id),status:text(row.status) as AccountRunStatus,externalApplicationId:optional(row.external_application_id),resumeCheckpoint:JSON.parse(text(row.resume_checkpoint_json)),errorCode:optional(row.error_code),errorDetailRedacted:optional(row.error_detail_redacted),createdAt:text(row.created_at),updatedAt:text(row.updated_at)}; }
-function rowToProfile(row: Row): AccountProfile { return {accountId:text(row.account_id),eplusEmail:text(row.eplus_email),encryptedPassword:text(row.encrypted_password),revealSupported:Boolean(row.reveal_supported),phone:optional(row.phone),name:optional(row.name),gender:optional(row.gender),birthday:optional(row.birthday),address:optional(row.address),companions:JSON.parse(text(row.companions_json)),pastCompanions:JSON.parse(text(row.past_companions_json)),harvestedAt:text(row.harvested_at),harvestStatus:text(row.harvest_status) as AccountProfile["harvestStatus"]}; }
+function rowToRun(row: Row): AccountRun { const serialPlanJson = optional(row.serial_plan_json); return {id:text(row.id),taskId:text(row.task_id),accountId:text(row.account_id),serialCode:optional(row.serial_code),serialPlan:serialPlanJson ? JSON.parse(serialPlanJson) : undefined,status:text(row.status) as AccountRunStatus,paymentState:(optional(row.payment_state) ?? "Idle") as PaymentRunState,externalApplicationId:optional(row.external_application_id),resumeCheckpoint:JSON.parse(text(row.resume_checkpoint_json)),errorCode:optional(row.error_code),errorDetailRedacted:optional(row.error_detail_redacted),createdAt:text(row.created_at),updatedAt:text(row.updated_at)}; }
+function rowToProfile(row: Row): AccountProfile { return {accountId:text(row.account_id),eplusEmail:text(row.eplus_email),encryptedPassword:text(row.encrypted_password),revealSupported:Boolean(row.reveal_supported),phone:optional(row.phone),name:optional(row.name),gender:optional(row.gender),birthday:optional(row.birthday),address:optional(row.address),creditCards:JSON.parse(text(row.credit_cards_json || "[]")),companions:JSON.parse(text(row.companions_json)),pastCompanions:JSON.parse(text(row.past_companions_json)),harvestedAt:text(row.harvested_at),harvestStatus:text(row.harvest_status) as AccountProfile["harvestStatus"]}; }
 function rowToRevealSession(row: Row): StoredRevealSession { return {id:text(row.id),accountId:text(row.account_id),requestId:text(row.request_id),senderWindowId:text(row.sender_window_id),createdAt:text(row.created_at),expiresAt:text(row.expires_at),consumed:Boolean(row.consumed)}; }

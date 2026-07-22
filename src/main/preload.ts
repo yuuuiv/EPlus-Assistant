@@ -18,6 +18,11 @@ const api: ElectronApi = {
   getQueueState: () => ipcRenderer.invoke("queue:get-state"),
   revealPassword: (accountId) => ipcRenderer.invoke("account:reveal-password", accountId),
   performManualAction: (input) => ipcRenderer.invoke("run:manual-action", input),
+  retryEmailCode: (runId) => ipcRenderer.invoke("run:retry-email-code", runId),
+  selectPaymentOptions: (input) => ipcRenderer.invoke("run:select-payment-options", input),
+  dispatchSubmission: (input) => ipcRenderer.invoke("run:dispatch-submission", input),
+  awaitCompletionEmail: (runId) => ipcRenderer.invoke("run:await-completion-email", runId),
+  recoverSubmission: (input) => ipcRenderer.invoke("submission:recover", input),
   getAuthorization: (input) => ipcRenderer.invoke("submission:get-authorization", input),
   harvestProfile: (input) => ipcRenderer.invoke("profile:harvest", input),
   refreshProfile: (accountId) => ipcRenderer.invoke("profile:refresh", accountId),
@@ -33,8 +38,11 @@ const api: ElectronApi = {
   readVerificationCode: (input) => ipcRenderer.invoke("settings:read-verification-code", input),
   getNetworkSettings: () => ipcRenderer.invoke("settings:get-network"),
   saveNetworkSettings: (input) => ipcRenderer.invoke("settings:save-network", input),
+  importNetworkConfig: (input) => ipcRenderer.invoke("settings:import-network", input),
   detectIp: () => ipcRenderer.invoke("network:detect"),
   rotateIp: () => ipcRenderer.invoke("network:rotate"),
+  listNetworkNodes: () => ipcRenderer.invoke("network:list-nodes"),
+  selectNetworkNode: (name) => ipcRenderer.invoke("network:select-node", name),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };
 

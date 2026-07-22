@@ -10,10 +10,14 @@ import {
   type BrowserArtifactWriter,
   type BrowserEngineConfig,
   type BrowserEngineError,
+  type BrowserPageInspector,
   type BrowserStep,
   type SessionCheckpoint
 } from "./browserSessionTypes.js";
 import { createPlaywrightArtifactPage } from "./playwrightArtifactPage.js";
+import { DEVICE_REGISTRY_DIGEST, getDeviceProfile } from "./deviceProfiles.js";
+import { DeviceProfileLock, DeviceProfileLockError } from "./deviceProfileLock.js";
+import type { BrowserSessionOwnership } from "./browserSessionTypes.js";
 
 export { BrowserEngineFailure } from "./browserSessionTypes.js";
 export type {
@@ -21,6 +25,7 @@ export type {
   BrowserArtifactWriter,
   BrowserEngineConfig,
   BrowserEngineError,
+  BrowserPageInspector,
   BrowserStep,
   SessionCheckpoint
 } from "./browserSessionTypes.js";
@@ -29,7 +34,6 @@ const MANUAL_STATES = new Set(["CaptchaSliderDevice", "CheckboxGate", "Reception
 const LOGIN_PATH = /\/login(?:[/?#]|$)/iu;
 
 export class BrowserSessionEngine {
-  private static readonly activeProfileDirs = new Set<string>();
   private context: BrowserContext | undefined;
   private page: Page | undefined;
   private accountId: string | undefined;
@@ -40,6 +44,8 @@ export class BrowserSessionEngine {
   private rejectManualContinuation: ((reason: Error) => void) | undefined;
   private quarantined = false;
   private networkLease: NetworkLease | undefined;
+  private profileLock: DeviceProfileLock | undefined;
+  private ownership: Readonly<Required<BrowserSessionOwnership>> | undefined;
 
   constructor(
     private readonly config: BrowserEngineConfig,
@@ -47,42 +53,65 @@ export class BrowserSessionEngine {
     private readonly networkService?: NetworkService
   ) {}
 
-  async startSession(accountId: string): Promise<void> {
+  async startSession(accountId: string, ownership: BrowserSessionOwnership = { taskId: accountId, runId: accountId }): Promise<void> {
     if (this.networkService) {
-      throw new BrowserEngineFailure("ContextQuarantined", "A network lease is required before browser launch.");
+      const started = await this.startNetworkSession({ accountId, runId: ownership.runId, contextId: ownership.runId, taskId: ownership.taskId, deviceProfileKey: ownership.deviceProfileKey });
+      if (!started) throw new BrowserEngineFailure("ManualTakeoverRequired", "网络控制器需要人工处理后才能打开浏览器。");
+      return;
     }
-    await this.launchSession(accountId);
+    await this.launchSession(accountId, ownership);
   }
 
-  private async launchSession(accountId: string): Promise<void> {
+  private async launchSession(accountId: string, requestedOwnership: BrowserSessionOwnership, launchGuard?: () => void): Promise<void> {
     if (this.context || this.page) {
       throw new BrowserEngineFailure("ContextQuarantined", "A browser session is already active for this engine.");
     }
     if (!(await this.validateExecutable())) {
       throw new BrowserEngineFailure("BrowserUnavailable", "The configured browser executable is unavailable.");
     }
-    const profileDir = path.join(this.config.profilesDir, accountId);
-    if (BrowserSessionEngine.activeProfileDirs.has(profileDir)) {
-      throw new BrowserEngineFailure("ContextQuarantined", "This account profile is already active.");
-    }
-    BrowserSessionEngine.activeProfileDirs.add(profileDir);
+    const deviceProfileKey = requestedOwnership.deviceProfileKey ?? "desktop-chrome";
+    const ownership = { taskId: requestedOwnership.taskId, runId: requestedOwnership.runId, deviceProfileKey } as const;
+    const profileDir = path.join(this.config.profilesDir, accountId, deviceProfileKey);
+    const profileLock = new DeviceProfileLock(profileDir);
+    let launchedContext: BrowserContext | undefined;
     try {
-      this.context = await chromium.launchPersistentContext(profileDir, {
+      launchGuard?.();
+      await profileLock.acquire({ accountId, runId: ownership.runId, deviceProfileKey, registryDigest: DEVICE_REGISTRY_DIGEST, contextGeneration: 1 });
+      launchGuard?.();
+      const descriptor = getDeviceProfile(deviceProfileKey);
+      launchedContext = await chromium.launchPersistentContext(profileDir, {
         executablePath: this.config.executablePath,
-        headless: false
+        headless: false,
+        ...descriptor
       });
-      this.page = this.context.pages()[0] ?? (await this.context.newPage());
+      const launchedPage = launchedContext.pages()[0] ?? (await launchedContext.newPage());
+      if (typeof launchedPage.bringToFront === "function") await launchedPage.bringToFront().catch(() => undefined);
+      launchGuard?.();
+      this.context = launchedContext;
+      this.page = launchedPage;
       this.accountId = accountId;
       this.profileDir = profileDir;
+      this.profileLock = profileLock;
+      this.ownership = ownership;
     } catch (error) {
-      BrowserSessionEngine.activeProfileDirs.delete(profileDir);
+      await launchedContext?.close();
+      await profileLock.release();
+      if (error instanceof DeviceProfileLockError) {
+        throw new BrowserEngineFailure("ContextQuarantined", error.message, { cause: error });
+      }
       throw error;
     }
   }
-
-  async startNetworkSession(input: { readonly accountId: string; readonly runId: string; readonly contextId: string }): Promise<boolean> {
+  async startNetworkSession(input: { readonly accountId: string; readonly runId: string; readonly contextId: string; readonly taskId?: string; readonly deviceProfileKey?: BrowserSessionOwnership["deviceProfileKey"]; readonly launchGuard?: () => void }): Promise<boolean> {
     if (!this.networkService) {
       throw new BrowserEngineFailure("ContextQuarantined", "Network service is required before browser launch.");
+    }
+    if (this.isSessionActive()) {
+      if (this.ownership?.runId !== input.runId || this.accountId !== input.accountId) {
+        throw new BrowserEngineFailure("ContextQuarantined", "另一个运行正在占用浏览器会话。");
+      }
+      await this.validateNetworkLease();
+      return true;
     }
     const lease = await this.networkService.acquireLease(input);
     if (lease === "manual-takeover") {
@@ -90,7 +119,7 @@ export class BrowserSessionEngine {
       return false;
     }
     try {
-      await this.launchSession(input.accountId);
+      await this.launchSession(input.accountId, { taskId: input.taskId ?? input.contextId, runId: input.runId, deviceProfileKey: input.deviceProfileKey }, input.launchGuard);
       this.networkLease = lease;
       return true;
     } catch (error) {
@@ -137,6 +166,7 @@ export class BrowserSessionEngine {
 
   async executeStep(action: string, executor?: BrowserActionExecutor): Promise<BrowserStep> {
     const page = this.requirePage();
+    await this.profileLock?.heartbeat();
     await this.validateNetworkLease();
     const before = await this.evaluateState();
     if (before.requiresManualTakeover || this.quarantined) {
@@ -166,6 +196,17 @@ export class BrowserSessionEngine {
     };
   }
 
+  async inspectPage<Result>(inspector: BrowserPageInspector<Result>): Promise<Result> {
+    const page = this.requirePage();
+    await this.profileLock?.heartbeat();
+    await this.validateNetworkLease();
+    const state = await this.evaluateState();
+    if (state.requiresManualTakeover || this.quarantined) {
+      throw new BrowserEngineFailure("ManualTakeoverRequired", `Automation is paused on ${state.state}.`);
+    }
+    return inspector.inspect(page);
+  }
+
   async reuseSession(): Promise<boolean> {
     const checkpointUrl = this.checkpoint?.url;
     if (!checkpointUrl) {
@@ -186,6 +227,19 @@ export class BrowserSessionEngine {
     return this.manualContinuation;
   }
 
+  async captureManualSnapshot(): Promise<readonly string[]> {
+    const page = this.requirePage();
+    const runId = this.ownership?.runId ?? this.accountId ?? "session";
+    const stepIndex = (this.checkpoint?.stepIndex ?? 0) + 1;
+    const manifestId = `${runId}:manual-${stepIndex}`;
+    const [screenshot, html] = await Promise.all([
+      this.artifactWriter.captureScreenshot(createPlaywrightArtifactPage(page), manifestId),
+      this.artifactWriter.captureHtmlSnapshot(await page.content(), manifestId)
+    ]);
+    this.checkpoint = { url: page.url(), state: "ManualTakeover", stepIndex, artifacts: [screenshot.filePath ?? screenshot.id, html.filePath ?? html.id].filter((item): item is string => Boolean(item)) };
+    return this.checkpoint.artifacts;
+  }
+
   resumeManualTakeover(): void {
     this.quarantined = false;
     this.resolveManualContinuation?.();
@@ -202,12 +256,12 @@ export class BrowserSessionEngine {
     this.context = undefined;
     this.page = undefined;
     this.accountId = undefined;
-    if (this.profileDir) {
-      BrowserSessionEngine.activeProfileDirs.delete(this.profileDir);
-    }
     this.profileDir = undefined;
     this.checkpoint = undefined;
     this.networkLease = undefined;
+    await this.profileLock?.release();
+    this.profileLock = undefined;
+    this.ownership = undefined;
     this.quarantined = false;
     this.cancelManualTakeover();
     await context?.close();

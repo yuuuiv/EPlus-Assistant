@@ -4,6 +4,9 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { AppDatabase } from "./storage/database.js";
 import { SecretStore } from "./storage/secretStore.js";
 import { registerIpc } from "./ipc.js";
+import { SubmissionGuard } from "./services/submissionGuard.js";
+import { recoverSubmittingRuns } from "./services/lotteryOrchestrator.js";
+import { loadLocalEnv } from "./runtimeConfig.js";
 type ElectronBrowserWindow = InstanceType<typeof BrowserWindow>;
 
 let mainWindow: ElectronBrowserWindow | undefined;
@@ -53,7 +56,7 @@ function errorHtml(title: string, detail: string): string {
     <body style="margin:0;background:#0c0f18;color:#e2e8f0;font-family:Segoe UI,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;">
       <main style="max-width:760px;padding:28px;border:1px solid rgba(255,255,255,.14);border-radius:14px;background:rgba(255,255,255,.05);">
         <h1 style="margin:0 0 10px;font-size:22px;">${title}</h1>
-        <pre style="white-space:pre-wrap;color:#f0a445;line-height:1.5;">${detail.replace(/[<>&]/g, (char) => {
+        <pre style="white-space:pre-wrap;color:#b8d775;line-height:1.5;">${detail.replace(/[<>&]/g, (char) => {
           if (char === "<") return "&lt;";
           if (char === ">") return "&gt;";
           return "&amp;";
@@ -129,6 +132,7 @@ async function getServices(): Promise<{ db: AppDatabase; secretStore: SecretStor
     }
     const db = new AppDatabase(dataDir);
     await db.open();
+    recoverSubmittingRuns(db, new SubmissionGuard(db, "pending-device-registry-digest"));
     return { db, secretStore: new SecretStore() };
   })();
   return servicesPromise;
@@ -150,6 +154,8 @@ async function bootstrap(): Promise<void> {
     await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml("应用启动失败", detail))}`);
   }
 }
+
+loadLocalEnv();
 
 app.whenReady().then(() => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

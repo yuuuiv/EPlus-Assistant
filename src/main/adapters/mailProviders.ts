@@ -1,5 +1,7 @@
 import type { ValidationResult, VerificationMailboxMode } from "../../shared/types.js";
 
+export const DEFAULT_CERISE_BOUQUET_ENDPOINT = "https://temp-mail.lianminglai.workers.dev";
+
 export interface MailConfig {
   apiEndpoint?: string;
   apiToken?: string;
@@ -16,6 +18,7 @@ export interface VerificationMailMessage {
   id?: string;
   from: string;
   to: string[];
+  originatingRecipient?: string;
   subject: string;
   receivedAt: Date;
   text?: string;
@@ -36,6 +39,14 @@ export interface VerificationCodeResult {
   reason: string;
 }
 
+export interface ApplicationConfirmationResult {
+  confirmed: boolean;
+  receivedAt?: string;
+  sender?: string;
+  subject?: string;
+  reason: string;
+}
+
 export interface MailProvider {
   validate(config: MailConfig): Promise<ValidationResult>;
   waitForVerificationCode(input: {
@@ -45,6 +56,11 @@ export interface MailProvider {
     senderAllowlist: string[];
     subjectMatchers: RegExp[];
   }): Promise<VerificationCodeResult>;
+  waitForApplicationConfirmation(input: {
+    recipient: string;
+    startedAt: Date;
+    timeoutMs: number;
+  }): Promise<ApplicationConfirmationResult>;
 }
 
 export class ManualMailProvider implements MailProvider {
@@ -58,6 +74,10 @@ export class ManualMailProvider implements MailProvider {
       reason: "当前邮箱适配器为手动模式，请在界面中输入验证码。"
     };
   }
+
+  async waitForApplicationConfirmation(): Promise<ApplicationConfirmationResult> {
+    return { confirmed: false, reason: "当前邮箱适配器为手动模式，无法自动确认申请完成邮件。" };
+  }
 }
 
 type MailboxFetch = typeof fetch;
@@ -68,9 +88,24 @@ interface RawMailboxMessage extends Record<string, unknown> {
   from_address?: unknown;
   sender?: unknown;
   source?: unknown;
+  address?: unknown;
+  metadata?: unknown;
   to?: unknown;
   recipient?: unknown;
   recipients?: unknown;
+  original_to?: unknown;
+  original_recipient?: unknown;
+  originalRecipient?: unknown;
+  forwarded_to?: unknown;
+  forwardedTo?: unknown;
+  delivered_to?: unknown;
+  deliveredTo?: unknown;
+  envelope_to?: unknown;
+  envelopeTo?: unknown;
+  source_mailbox?: unknown;
+  sourceMailbox?: unknown;
+  forwarded_from?: unknown;
+  forwardedFrom?: unknown;
   subject?: unknown;
   receivedAt?: unknown;
   received_at?: unknown;
@@ -87,7 +122,7 @@ interface RawMailboxMessage extends Record<string, unknown> {
 export class HttpJsonMailProvider implements MailProvider {
   constructor(
     protected readonly config: MailConfig,
-    private readonly fetcher: MailboxFetch = fetch
+    protected readonly fetcher: MailboxFetch = fetch
   ) {}
 
   async validate(config: MailConfig = this.config): Promise<ValidationResult> {
@@ -132,7 +167,7 @@ export class HttpJsonMailProvider implements MailProvider {
       const candidates = messages
         .filter((message) => isAllowedSender(message.from, input.senderAllowlist))
         .filter((message) => message.receivedAt >= input.startedAt)
-        .filter((message) => message.to.length === 0 || message.to.some((recipient) => sameMailbox(recipient, input.recipient)))
+        .filter((message) => belongsToRecipient(message, input.recipient))
         .filter((message) => input.subjectMatchers.some((matcher) => matchesSubject(matcher, message.subject)))
         .map((message) => ({ message, code: extractVerificationCodeFromMessage(message) }))
         .filter((item): item is { message: VerificationMailMessage; code: string } => Boolean(item.code));
@@ -159,7 +194,38 @@ export class HttpJsonMailProvider implements MailProvider {
     return { manualActionRequired: true, reason: lastReason };
   }
 
-  private async fetchMessages(recipient: string, startedAt: Date): Promise<VerificationMailMessage[]> {
+  async waitForApplicationConfirmation(input: {
+    recipient: string;
+    startedAt: Date;
+    timeoutMs: number;
+  }): Promise<ApplicationConfirmationResult> {
+    const validation = await this.validate();
+    if (!validation.ok) return { confirmed: false, reason: validation.message };
+
+    const deadline = Date.now() + input.timeoutMs;
+    const pollingIntervalMs = Math.max(1000, this.config.pollingIntervalMs ?? 5000);
+    while (Date.now() <= deadline) {
+      const messages = await this.fetchMessages(input.recipient, input.startedAt);
+      const match = messages
+        .filter((message) => message.receivedAt >= input.startedAt)
+        .filter((message) => isExactSender(message.from, "info@eplus.co.jp"))
+        .filter((message) => belongsToRecipient(message, input.recipient))
+        .find(isApplicationCompletionMessage);
+      if (match) {
+        return {
+          confirmed: true,
+          receivedAt: match.receivedAt.toISOString(),
+          sender: match.from,
+          subject: match.subject,
+          reason: "已收到 info@eplus.co.jp 发出的申请完成邮件。"
+        };
+      }
+      await delay(Math.min(pollingIntervalMs, Math.max(0, deadline - Date.now())));
+    }
+    return { confirmed: false, reason: "在等待时间内没有收到符合要求的 e+ 申请完成邮件。" };
+  }
+
+  protected async fetchMessages(recipient: string, startedAt: Date): Promise<VerificationMailMessage[]> {
     const response = await this.fetcher(this.buildEndpoint(recipient, startedAt), {
       headers: this.buildHeaders(recipient)
     });
@@ -219,6 +285,61 @@ export class AuthMailboxProvider extends HttpJsonMailProvider {
   }
 }
 
+/** Reads a managed Cerise Bouquet mailbox without exposing its credential to the renderer. */
+export class CeriseBouquetMailProvider extends HttpJsonMailProvider {
+  override async validate(): Promise<ValidationResult> {
+    if (!this.config.apiEndpoint) return { ok: false, message: "cerise-bouquet 邮箱地址未配置。" };
+    if (!this.config.apiToken && !this.config.password) return { ok: false, message: "主进程没有找到 cerise-bouquet 邮箱读取凭证。请设置 EPLUS_CERISE_BOUQUET_JWT 或 EPLUS_CERISE_BOUQUET_ADMIN_AUTH。" };
+    if (!this.config.mailboxAddress) return { ok: false, message: "请填写验证码收件邮箱。" };
+    return { ok: true, message: "cerise-bouquet 邮箱托管读取已配置。" };
+  }
+
+  protected override buildEndpoint(_recipient: string): URL {
+    const endpoint = new URL(this.config.apiEndpoint ?? DEFAULT_CERISE_BOUQUET_ENDPOINT);
+    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/api/parsed_mails`.replace(/\/+/g, "/");
+    endpoint.searchParams.set("limit", endpoint.searchParams.get("limit") ?? "100");
+    endpoint.searchParams.set("offset", endpoint.searchParams.get("offset") ?? "0");
+    return endpoint;
+  }
+
+  protected override async fetchMessages(recipient: string, startedAt: Date): Promise<VerificationMailMessage[]> {
+    if (!this.config.password || this.config.apiToken) return super.fetchMessages(recipient, startedAt);
+    const base = new URL(this.config.apiEndpoint ?? DEFAULT_CERISE_BOUQUET_ENDPOINT);
+    const adminHeaders = { Accept: "application/json", "x-admin-auth": this.config.password };
+    const userResponse = await this.fetcher(new URL("/admin/users", base), { headers: adminHeaders });
+    if (!userResponse.ok) throw new Error(`cerise admin 用户查询失败：HTTP ${userResponse.status}`);
+    const userPayload: unknown = await userResponse.json();
+    const userRows = extractRows(userPayload);
+    const user = userRows.find((row) => String(row.user_email ?? row.email ?? "").trim().toLowerCase() === this.config.mailboxAddress?.trim().toLowerCase());
+    if (!user?.id) throw new Error("cerise admin bridge 未找到对应邮箱用户。");
+    const addressResponse = await this.fetcher(new URL(`/admin/users/bind_address/${encodeURIComponent(String(user.id))}`, base), { headers: adminHeaders });
+    if (!addressResponse.ok) throw new Error(`cerise admin 地址查询失败：HTTP ${addressResponse.status}`);
+    const addressRows = extractRows(await addressResponse.json());
+    const address = addressRows.find((row) => String(row.address ?? row.name ?? "").trim().toLowerCase() === recipient.trim().toLowerCase());
+    if (!address?.id) throw new Error("cerise admin bridge 未找到对应收件地址。");
+    const credentialResponse = await this.fetcher(new URL(`/admin/show_password/${encodeURIComponent(String(address.id))}`, base), { headers: adminHeaders });
+    if (!credentialResponse.ok) throw new Error(`cerise admin 凭证获取失败：HTTP ${credentialResponse.status}`);
+    const credentialPayload: unknown = await credentialResponse.json();
+    const jwt = isRecord(credentialPayload) && typeof credentialPayload.jwt === "string" ? credentialPayload.jwt : undefined;
+    if (!jwt) throw new Error("cerise admin bridge 未返回地址 JWT。");
+    const endpoint = this.buildEndpoint(recipient);
+    endpoint.searchParams.set("limit", "100");
+    endpoint.searchParams.set("offset", "0");
+    const mailResponse = await this.fetcher(endpoint, { headers: { Accept: "application/json", Authorization: `Bearer ${jwt}` } });
+    if (!mailResponse.ok) throw new Error(`cerise 邮件读取失败：HTTP ${mailResponse.status}`);
+    return normalizeMailboxResponse(await mailResponse.json()).filter((message) => message.receivedAt >= startedAt);
+  }
+
+  protected override buildHeaders(recipient: string): Record<string, string> {
+    const headers = super.buildHeaders(recipient);
+    if (this.config.password && !this.config.apiToken) {
+      delete headers["x-custom-auth"];
+      headers["x-admin-auth"] = this.config.password;
+    }
+    return headers;
+  }
+}
+
 export function createMailProvider(
   mode: VerificationMailboxMode,
   config: MailConfig,
@@ -232,6 +353,9 @@ export function createMailProvider(
   }
   if (mode === "auth-mailbox") {
     return new AuthMailboxProvider(config, fetcher);
+  }
+  if (mode === "cerise-bouquet") {
+    return new CeriseBouquetMailProvider(config, fetcher);
   }
   throw new Error(`不支持 ${mode} 邮箱模式。请选择 manual、temp-mail-forwarder 或 auth-mailbox。`);
 }
@@ -257,6 +381,15 @@ export function extractVerificationCodeFromMessage(message: VerificationMailMess
   return undefined;
 }
 
+export function isApplicationCompletionMessage(message: VerificationMailMessage): boolean {
+  const body = htmlToText(message.html) || message.text || "";
+  const haystack = `${message.subject}\n${body}`;
+  return isExactSender(message.from, "info@eplus.co.jp")
+    && /申込み完了[・･]抽選結果確認期間のご案内/u.test(haystack)
+    && /申込み(?:履歴|状況照会)/u.test(haystack)
+    && /https?:\/\/eplus\.jp\/jyoukyou\/?/iu.test(haystack);
+}
+
 function toCandidateMetadata(item: { message: VerificationMailMessage; code: string }): VerificationCodeCandidate {
   return {
     code: item.code,
@@ -277,6 +410,16 @@ function normalizeMailboxResponse(json: unknown): VerificationMailMessage[] {
   return rawMessages.map(normalizeMessage).filter((message): message is VerificationMailMessage => Boolean(message));
 }
 
+function extractRows(json: unknown): Record<string, unknown>[] {
+  if (Array.isArray(json)) return json.filter(isRecord);
+  if (!isRecord(json)) return [];
+  for (const key of ["results", "items", "data", "addresses", "users"]) {
+    const value = json[key];
+    if (Array.isArray(value)) return value.filter(isRecord);
+  }
+  return [];
+}
+
 function normalizeMessage(raw: unknown): VerificationMailMessage | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -288,15 +431,31 @@ function normalizeMessage(raw: unknown): VerificationMailMessage | undefined {
   if (!receivedAt || !from || !subject) {
     return undefined;
   }
+  const text = stringifyMaybe(message.text ?? message.body ?? message.content);
+  const html = stringifyMaybe(message.html);
+  const originatingRecipient = firstMailbox([
+    message.original_to, message.original_recipient, message.originalRecipient,
+    message.forwarded_to, message.forwardedTo, message.delivered_to, message.deliveredTo,
+    message.envelope_to, message.envelopeTo, message.source_mailbox, message.sourceMailbox,
+    message.forwarded_from, message.forwardedFrom,
+    message.address,
+    extractOriginalRecipient(text), extractOriginalRecipient(htmlToText(html)),
+    extractOriginalRecipient(stringifyMaybe(message.metadata))
+  ]);
   return {
     id: message.id === undefined ? undefined : String(message.id),
     from,
     to: normalizeRecipients(message.to ?? message.recipient ?? message.recipients),
     subject,
     receivedAt,
-    text: stringifyMaybe(message.text ?? message.body ?? message.content),
-    html: stringifyMaybe(message.html)
+    originatingRecipient,
+    text,
+    html
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeRecipients(value: unknown): string[] {
@@ -333,6 +492,25 @@ function isAllowedSender(sender: string, allowlist: string[]): boolean {
   return allowlist.some((allowed) => domain === allowed.toLowerCase() || domain.endsWith(`.${allowed.toLowerCase()}`));
 }
 
+function firstMailbox(values: unknown[]): string | undefined {
+  for (const value of values) {
+    const candidate = Array.isArray(value) ? value[0] : value;
+    const match = String(candidate ?? "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu)?.[0];
+    if (match) return match.toLowerCase();
+  }
+  return undefined;
+}
+
+function extractOriginalRecipient(body?: string): string | undefined {
+  if (!body) return undefined;
+  return body.match(/(?:x-original-to|delivered-to|envelope-to|original[- ]?(?:to|recipient))\s*:\s*<?([^>\s,;]+@[^>\s,;]+)>?/iu)?.[1]?.toLowerCase();
+}
+
+function isExactSender(sender: string, expected: string): boolean {
+  const address = sender.match(/<([^>]+)>/)?.[1] ?? sender;
+  return address.trim().toLowerCase() === expected.toLowerCase();
+}
+
 function matchesSubject(matcher: RegExp, subject: string): boolean {
   matcher.lastIndex = 0;
   return matcher.test(subject);
@@ -340,6 +518,11 @@ function matchesSubject(matcher: RegExp, subject: string): boolean {
 
 function sameMailbox(left: string, right: string): boolean {
   return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function belongsToRecipient(message: VerificationMailMessage, recipient: string): boolean {
+  const normalized = recipient.trim().toLowerCase();
+  return message.to.some((value) => sameMailbox(value, normalized)) || message.originatingRecipient === normalized;
 }
 
 function delay(ms: number): Promise<void> {

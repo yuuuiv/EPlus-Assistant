@@ -8,7 +8,9 @@ export class RecordRefreshService {
   constructor(
     private readonly engine: BrowserSessionEngine,
     private readonly adapter: EplusBrowserAdapter,
-    private readonly db: AppDatabase
+    private readonly db: AppDatabase,
+    private readonly decryptSecret?: (cipherText: string) => string,
+    private readonly mailAttribution?: { readCode?(input: { accountId: string; startedAt: string }): Promise<{ code?: string; manualActionRequired: boolean }> }
   ) {}
 
   async refreshApplicationRecords(accountId: string): Promise<ApplicationRecord[]> {
@@ -33,9 +35,23 @@ export class RecordRefreshService {
     if (this.engine.isSessionActive() && (await this.engine.reuseSession())) return;
     if (this.engine.isSessionActive()) await this.engine.close();
     await this.engine.startSession(accountId);
-    const state = await this.adapter.detectChallenge();
-    if (state === "Login" || state === "EmailCode") {
-      throw new BrowserEngineFailure("ManualTakeoverRequired", "An interactive login is required.");
+    let state = await this.adapter.detectChallenge();
+    if (state === "Unknown") {
+      await this.adapter.openMemberProfile();
+      state = await this.adapter.detectChallenge();
     }
+    if (state === "Login") {
+      const account = this.db.getStoredAccount(accountId);
+      if (!account || !this.decryptSecret) throw new BrowserEngineFailure("ManualTakeoverRequired", "Stored account credentials are unavailable for automatic login.");
+      await this.adapter.login(account.eplusEmail, this.decryptSecret(account.encryptedEplusPassword));
+      state = await this.adapter.detectChallenge();
+    }
+    if (state === "EmailCode") {
+      const result = await this.mailAttribution?.readCode?.({ accountId, startedAt: new Date().toISOString() });
+      if (!result?.code || result.manualActionRequired) throw new BrowserEngineFailure("ManualTakeoverRequired", "The verification email could not be safely attributed.");
+      await this.adapter.enterEmailCode(result.code);
+      state = await this.adapter.detectChallenge();
+    }
+    if (state === "Login" || state === "EmailCode" || state === "CaptchaSliderDevice" || state === "CheckboxGate" || state === "Unknown") throw new BrowserEngineFailure("ManualTakeoverRequired", "Automatic account login did not reach the member page.");
   }
 }

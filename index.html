@@ -5,13 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
     <title>Eplus 抽选助手</title>
+    <style>
+      #boot-splash { min-height: 100vh; display: grid; place-items: center; background: #0c0f18; color: #e2e8f0; font-family: "Segoe UI", system-ui, sans-serif; }
+      #boot-splash div { max-width: 520px; padding: 24px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(255,255,255,.04); }
+      #boot-splash p { margin: 8px 0 0; color: #8892a4; }
+      @media (prefers-color-scheme: light) {
+        #boot-splash { background: #f4f5f8; color: #1b2130; }
+        #boot-splash div { border-color: rgba(0,0,0,.1); background: rgba(0,0,0,.03); }
+        #boot-splash p { color: #626d7f; }
+      }
+    </style>
   </head>
   <body>
     <div id="root">
-      <div style="min-height:100vh;display:grid;place-items:center;background:#0c0f18;color:#e2e8f0;font-family:Segoe UI,system-ui,sans-serif;">
-        <div style="max-width:520px;padding:24px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.04);">
+      <div id="boot-splash">
+        <div>
           <strong>正在启动 Eplus 抽选助手</strong>
-          <p style="margin:8px 0 0;color:#8892a4;">如果这里长时间不变，请查看窗口日志或重新运行 npm start。</p>
+          <p>如果这里长时间不变，请查看窗口日志或重新运行 npm start。</p>
         </div>
       </div>
     </div>

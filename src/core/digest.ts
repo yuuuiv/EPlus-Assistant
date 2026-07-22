@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { LotteryPreference } from "../shared/types.js";
+import type { DeviceProfileKey, LotteryPreference, PaymentSelection } from "../shared/types.js";
 
 export function stableJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -50,4 +50,21 @@ export function makeIdempotencyKey(input: {
 
 export function makePreferencesEqual(left: LotteryPreference, right: LotteryPreference): boolean {
   return stableJson(left) === stableJson(right);
+}
+
+export function makePaymentAuthorizationDigest(input: {
+  taskId: string;
+  runId: string;
+  preference: LotteryPreference;
+  selectedOptions: PaymentSelection[];
+  deviceProfileKey: DeviceProfileKey;
+  deviceRegistryDigest: string;
+  pageFingerprint: string;
+  controlFingerprint: string;
+  reviewDigest: string;
+  acknowledgementVersion: number;
+  authorizationRevision: number;
+  nonce: string;
+}): string {
+  return createHash("sha256").update(stableJson(input)).digest("hex");
 }

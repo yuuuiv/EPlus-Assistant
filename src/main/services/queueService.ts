@@ -1,6 +1,7 @@
 import type { AccountRun, AccountRunStatus, LotteryTask, SubmissionAuthorization, TaskStatus } from "../../shared/types.js";
 import type { LotteryOrchestrator } from "./lotteryOrchestrator.js";
 import type { AppDatabase } from "../storage/database.js";
+import { SubmissionGuard, validatePaymentCheckpointForTransition } from "./submissionGuard.js";
 
 export type TaskQueueEvent =
   | { kind: "run-started"; taskId: string; runId: string; accountId: string }
@@ -18,8 +19,9 @@ export interface QueueState {
 }
 
 type QueueItem = { readonly taskId: string; readonly runIndex: number };
-type RunExecutor = Pick<LotteryOrchestrator, "runSingleAccount" | "reconcile">;
+type RunExecutor = Pick<LotteryOrchestrator, "runSingleAccount" | "reconcile"> & Partial<Pick<LotteryOrchestrator, "resumeManualTakeover" | "enterVerificationCode" | "retryEmailCode">>;
 type ManualAction = "continue" | "cancel-account" | "cancel-task" | "reconcile-unknown";
+type PostRunAccountHook = (accountId: string, runId: string) => Promise<void>;
 
 const completedStatuses = new Set<AccountRunStatus>(["Submitted", "AlreadyApplied"]);
 const terminalStatuses = new Set<AccountRunStatus>(["Submitted", "AlreadyApplied", "Failed", "Cancelled", "UnknownSubmissionState"]);
@@ -35,16 +37,17 @@ export class QueueService {
 
   constructor(
     private readonly orchestrator: RunExecutor,
-    private readonly db: AppDatabase
+    private readonly db: AppDatabase,
+    private readonly submissionGuard = new SubmissionGuard(db, "pending-device-registry-digest"),
+    private readonly postRunAccountHook?: PostRunAccountHook
   ) {}
 
   async enqueueTask(task: LotteryTask): Promise<void> {
     if (task.status !== "Queued") throw new Error("Only queued tasks can be enqueued.");
     if (!this.db.getEvent(task.eventSnapshotId)) throw new Error("Task event snapshot was not found.");
 
-    const runsByAccount = new Map(this.db.listRunsForTask(task.id).map((run) => [run.accountId, run]));
-    const orderedRuns = task.accountIds.map((accountId) => runsByAccount.get(accountId));
-    if (orderedRuns.some((run) => !run)) throw new Error("Task account runs are incomplete.");
+    const orderedRuns = this.db.listRunsForTask(task.id);
+    if (orderedRuns.length === 0) throw new Error("Task account runs are incomplete.");
 
     for (let runIndex = 0; runIndex < orderedRuns.length; runIndex += 1) {
       const run = orderedRuns[runIndex];
@@ -109,7 +112,7 @@ export class QueueService {
     this.emit({ kind: "task-completed", taskId, status: "Cancelled" });
   }
 
-  async performManualAction(input: { readonly runId: string; readonly action: ManualAction }): Promise<void> {
+  async performManualAction(input: { readonly runId: string; readonly action: ManualAction; readonly verificationCode?: string }): Promise<void> {
     const run = this.requireRun(input.runId);
     const task = this.requireTask(run.taskId);
     if (input.action === "cancel-account") return this.cancelRun(run.id);
@@ -121,15 +124,43 @@ export class QueueService {
       this.aggregateTask(task.id);
       return;
     }
-    if (run.status !== "AwaitingManualAction" && run.status !== "AwaitingSubmitConfirmation") {
+    if (run.status !== "AwaitingManualAction" && run.status !== "AwaitingEmailCode" && run.status !== "AwaitingSubmitConfirmation") {
       throw new Error("Only the current manual checkpoint can continue.");
     }
     if (!this.currentRun || this.currentRun.runId !== run.id) throw new Error("Manual action is stale for this queue run.");
+    if (input.verificationCode) await this.orchestrator.enterVerificationCode?.(run.id, input.verificationCode);
+    await this.orchestrator.resumeManualTakeover?.(run.id);
+    this.validatePaymentResume(run, task);
     this.queue.unshift(this.itemForRun(task, run));
     this.currentRun = null;
     this.status = "idle";
     this.audit(task.id, run.id, "info", "queue.run.continued", {});
     await this.processNext();
+  }
+
+  async resumeSelectedPayment(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    const task = this.requireTask(run.taskId);
+    if (run.status !== "FillingForm" || run.paymentState !== "PaymentSelectionApplied") throw new Error("Only a selected payment run can continue.");
+    if (!this.currentRun || this.currentRun.runId !== run.id) throw new Error("Payment selection is stale for this queue run.");
+    this.queue.unshift(this.itemForRun(task, run));
+    this.currentRun = null;
+    this.status = "idle";
+    this.audit(task.id, run.id, "info", "queue.payment.selected", {});
+    await this.processNext();
+  }
+
+  async finalizeDispatchedRun(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    if (run.status !== "Submitted" && run.status !== "AlreadyApplied" && run.status !== "UnknownSubmissionState") throw new Error("Only a dispatched run can be finalized.");
+    if (this.currentRun?.runId === run.id) this.currentRun = null;
+    this.audit(run.taskId, run.id, "info", "queue.run.dispatched", { status: run.status });
+    this.aggregateTask(run.taskId);
+    if (run.status !== "UnknownSubmissionState" && this.queue.length > 0 && !this.processing) {
+      this.pauseRequested = false;
+      this.status = "idle";
+      await this.processNext();
+    }
   }
 
   getState(): QueueState {
@@ -156,14 +187,22 @@ export class QueueService {
     const event = this.db.getEvent(task.eventSnapshotId);
     if (!event) throw new Error("Task event snapshot was not found.");
     const authorization = this.db.getSubmissionAuthorization(run.id);
-    if (!authorization) return this.pauseForManualAction(task, run, "AwaitingSubmissionAuthorization");
 
     if (task.status !== "Running") this.db.updateTaskStatus(task.id, "Running");
     this.currentRun = { taskId: task.id, runId: run.id, accountId: run.accountId };
     this.emit({ kind: "run-started", taskId: task.id, runId: run.id, accountId: run.accountId });
     this.audit(task.id, run.id, "info", "queue.run.started", {});
     try {
-      const result = await this.orchestrator.runSingleAccount({ run, task, event, policy: authorization.policy, authorization });
+      const result = await this.orchestrator.runSingleAccount({ run, task, event, authorization });
+      if (completedStatuses.has(result.status) && this.postRunAccountHook) {
+        try {
+          await this.postRunAccountHook(run.accountId, run.id);
+          this.audit(task.id, run.id, "info", "profile.auto-harvest.completed", { accountId: run.accountId });
+        } catch (error) {
+          const message = redactError(error);
+          this.audit(task.id, run.id, "warn", "profile.auto-harvest.failed", { accountId: run.accountId, error: message });
+        }
+      }
       this.handleResult(task, result);
     } catch (error) {
       const message = redactError(error);
@@ -218,17 +257,37 @@ export class QueueService {
   }
 
   private runForItem(task: LotteryTask, item: QueueItem): AccountRun {
-    const accountId = task.accountIds[item.runIndex];
-    if (!accountId) throw new Error("Queue run index is invalid.");
-    const run = this.db.listRunsForTask(task.id).find((candidate) => candidate.accountId === accountId);
+    const run = this.db.listRunsForTask(task.id)[item.runIndex];
     if (!run) throw new Error("Task account run was not found.");
     return run;
   }
 
+  async retryEmailCode(runId: string): Promise<void> {
+    const run = this.requireRun(runId);
+    const task = this.requireTask(run.taskId);
+    if (run.status !== "AwaitingEmailCode") throw new Error("Only an email-code run can be retried.");
+    if (!this.currentRun || this.currentRun.runId !== run.id) throw new Error("Email-code retry is stale for this queue run.");
+    const retry = this.orchestrator.retryEmailCode ? await this.orchestrator.retryEmailCode(run.id) : run;
+    if (retry.status === "AwaitingEmailCode") return;
+    this.queue.unshift(this.itemForRun(task, retry));
+    this.currentRun = null;
+    this.status = "idle";
+    await this.processNext();
+  }
+
   private itemForRun(task: LotteryTask, run: AccountRun): QueueItem {
-    const runIndex = task.accountIds.indexOf(run.accountId);
+    const runIndex = this.db.listRunsForTask(task.id).findIndex((candidate) => candidate.id === run.id);
     if (runIndex < 0) throw new Error("Run account is not part of its task.");
     return { taskId: task.id, runIndex };
+  }
+
+  private validatePaymentResume(run: AccountRun, task: LotteryTask): void {
+    this.submissionGuard.assertActionAllowed({ taskId: task.id, runId: run.id, deviceProfileKey: task.deviceProfileKey ?? "desktop-chrome" });
+    if (run.paymentState === "Idle") return;
+    const checkpoint = this.db.getPaymentCheckpoint(run.id);
+    const selections = this.db.getPaymentSelections(run.id);
+    if (!checkpoint || !selections || selections.length === 0) throw new Error("Payment checkpoint is missing or has no persisted selection.");
+    validatePaymentCheckpointForTransition(checkpoint, { taskId: task.id, runId: run.id, checkpointId: checkpoint.checkpointId, checkpointRevision: checkpoint.checkpointRevision, candidateIds: selections.map((selection) => selection.candidateId), expectedControlFingerprint: checkpoint.controlFingerprint });
   }
 
   private requireTask(taskId: string): LotteryTask {
@@ -271,7 +330,7 @@ export class QueueService {
 }
 
 function isManualCheckpoint(status: AccountRunStatus): boolean {
-  return status === "AwaitingManualAction" || status === "AwaitingSubmitConfirmation";
+  return status === "AwaitingManualAction" || status === "AwaitingEmailCode" || status === "AwaitingSubmitConfirmation";
 }
 
 function redactError(error: unknown): string {

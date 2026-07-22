@@ -1,4 +1,5 @@
 import type { Page } from "playwright-core";
+import type { DeviceProfileKey } from "../../shared/types.js";
 
 export type BrowserEngineError =
   | "BrowserUnavailable"
@@ -12,9 +13,16 @@ export type BrowserEngineError =
 export interface BrowserEngineConfig {
   readonly executablePath: string;
   readonly profilesDir: string;
+  readonly artifactDir?: string;
   readonly navigationTimeoutMs: number;
   readonly retryLimit: number;
   readonly retryDelayMs: number;
+}
+
+export interface BrowserSessionOwnership {
+  readonly taskId: string;
+  readonly runId: string;
+  readonly deviceProfileKey?: DeviceProfileKey;
 }
 
 export interface BrowserStep {
@@ -44,6 +52,10 @@ export interface BrowserArtifactWriter {
 
 export interface BrowserActionExecutor {
   execute(page: Page): Promise<void>;
+}
+
+export interface BrowserPageInspector<Result> {
+  inspect(page: Page): Promise<Result>;
 }
 
 export class BrowserEngineFailure extends Error {

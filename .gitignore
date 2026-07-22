@@ -11,9 +11,13 @@ artifacts/
 *.db
 *.sqlite
 *.sqlite3
+.env
+sp.gesicht.eplus.jp.har
 
 # Local automation/cache files
 .codegraph/
+.opencode/
+.playwright-mcp/
 .omo/
 .agents/
 .claude/
@@ -21,3 +25,4 @@ exports_*
 .vite/
 .DS_Store
 Thumbs.db
+tests/

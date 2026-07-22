@@ -16,6 +16,8 @@ import type {
   LotteryResultRecord,
   LotteryPreference,
   ManualActionInput,
+  PaymentSelectionInput,
+  SubmissionDispatchInput,
   PasswordRevealResponse,
   SubmissionAuthorization,
   ValidationResult,
@@ -23,6 +25,8 @@ import type {
   VerificationMailboxUpdate,
   NetworkSettings,
   NetworkSettingsUpdate,
+  NetworkNode,
+  CreditCardSummary,
   VerificationCodeReadInput,
   VerificationCodeReadResult
 } from "./types.js";
@@ -60,6 +64,11 @@ export interface IpIdentity {
   city?: string;
 }
 
+export interface NetworkImportInput {
+  controller: "clash" | "sing-box";
+  text: string;
+}
+
 export interface ElectronApi {
   getState(): Promise<DashboardState>;
   addAccount(input: AddAccountInput): Promise<Account>;
@@ -77,6 +86,11 @@ export interface ElectronApi {
   getQueueState(): Promise<QueueState>;
   revealPassword(accountId: string): Promise<PasswordRevealResponse>;
   performManualAction(input: ManualActionInput): Promise<void>;
+  retryEmailCode(runId: string): Promise<void>;
+  selectPaymentOptions(input: PaymentSelectionInput): Promise<SubmissionAuthorization>;
+  dispatchSubmission(input: SubmissionDispatchInput): Promise<void>;
+  awaitCompletionEmail(runId: string): Promise<AccountRun>;
+  recoverSubmission(input: { taskId: string; runId: string }): Promise<void>;
   getAuthorization(input: { taskId: string; runId: string }): Promise<SubmissionAuthorization | null>;
   harvestProfile(input: { accountId: string; existingSession?: boolean }): Promise<HarvestRunResult>;
   refreshProfile(accountId: string): Promise<HarvestRunResult>;
@@ -92,8 +106,11 @@ export interface ElectronApi {
   readVerificationCode(input?: VerificationCodeReadInput): Promise<VerificationCodeReadResult>;
   getNetworkSettings(): Promise<NetworkSettings>;
   saveNetworkSettings(input: NetworkSettingsUpdate): Promise<NetworkSettings>;
+  importNetworkConfig(input: NetworkImportInput): Promise<NetworkSettingsUpdate>;
   detectIp(): Promise<IpIdentity>;
   rotateIp(): Promise<void>;
+  listNetworkNodes(): Promise<NetworkNode[]>;
+  selectNetworkNode(name: string): Promise<void>;
   openDataFolder(): Promise<void>;
 }
 
@@ -118,6 +135,8 @@ export type {
   LotteryResultRecord,
   LotteryPreference,
   ManualActionInput,
+  PaymentSelectionInput,
+  SubmissionDispatchInput,
   PasswordRevealResponse,
   SubmissionAuthorization,
   ValidationResult,
@@ -127,5 +146,7 @@ export type {
   VerificationMailboxUpdate,
   NetworkSettings,
   NetworkSettingsUpdate,
+  NetworkNode,
+  CreditCardSummary,
   CreateTaskInputV2
 };

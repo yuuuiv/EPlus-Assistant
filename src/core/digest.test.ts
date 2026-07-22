@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeConfirmationDigest, makeIdempotencyKey, makePreferencesEqual } from "./digest.js";
+import { makeConfirmationDigest, makeIdempotencyKey, makePaymentAuthorizationDigest, makePreferencesEqual } from "./digest.js";
 import type { LotteryPreference } from "../shared/types.js";
 
 const preference: LotteryPreference = {
@@ -91,5 +91,12 @@ describe("lottery preference digests", () => {
     };
 
     expect(makePreferencesEqual(preferenceWithoutDaySelection, persistedPreference)).toBe(true);
+  });
+
+  it("changes final authorization digest when selected payment or device profile changes", () => {
+    const base = { taskId: "task", runId: "run", preference, selectedOptions: [{ groupKey: "payment", candidateId: "candidate-a", domValue: "store" }], deviceProfileKey: "desktop-chrome" as const, deviceRegistryDigest: "registry", pageFingerprint: "page", controlFingerprint: "control", reviewDigest: "review", acknowledgementVersion: 1, authorizationRevision: 1, nonce: "nonce" };
+    expect(makePaymentAuthorizationDigest(base)).not.toBe(makePaymentAuthorizationDigest({ ...base, selectedOptions: [{ groupKey: "payment", candidateId: "candidate-b", domValue: "card" }] }));
+    expect(makePaymentAuthorizationDigest(base)).not.toBe(makePaymentAuthorizationDigest({ ...base, deviceProfileKey: "iphone-13" }));
+    expect(makePaymentAuthorizationDigest(base)).not.toBe(makePaymentAuthorizationDigest({ ...base, reviewDigest: "changed-review" }));
   });
 });

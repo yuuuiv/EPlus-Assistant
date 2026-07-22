@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { launchPersistentContext } = vi.hoisted(() => ({ launchPersistentContext: vi.fn() }));
 
-vi.mock("playwright-core", () => ({ chromium: { launchPersistentContext } }));
+vi.mock("playwright-core", async (importOriginal) => ({ ...(await importOriginal<typeof import("playwright-core")>()), chromium: { launchPersistentContext } }));
 
 import { BrowserEngineFailure, BrowserSessionEngine } from "./browserSessionEngine.js";
 import { NetworkService } from "../services/networkService.js";
@@ -67,6 +67,22 @@ describe("BrowserSessionEngine", () => {
     await engine.close();
   });
 
+  it("applies the complete desktop descriptor by default", async () => {
+    const { engine } = await engineFixture();
+    await engine.startSession("account-1", { taskId: "task-1", runId: "run-1" });
+    expect(launchPersistentContext).toHaveBeenCalledWith(expect.stringContaining("desktop-chrome"), expect.objectContaining({ viewport: { width: 1280, height: 720 }, screen: { width: 1920, height: 1080 }, isMobile: false, hasTouch: false }));
+    await engine.close();
+  });
+
+  it("applies a selected mobile descriptor without mutating it after creation", async () => {
+    const { engine } = await engineFixture();
+    await engine.startSession("account-1", { taskId: "task-1", runId: "run-1", deviceProfileKey: "iphone-13" });
+    const options = launchPersistentContext.mock.calls[0][1] as { readonly viewport: { readonly width: number; readonly height: number } };
+    expect(options.viewport).toEqual({ width: 390, height: 664 });
+    expect(() => Object.defineProperty(options.viewport, "width", { value: 1 })).toThrow();
+    await engine.close();
+  });
+
   it("rejects an invalid executable without a launch attempt", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "eplus-browser-engine-"));
     directories.push(directory);
@@ -92,6 +108,44 @@ describe("BrowserSessionEngine", () => {
 
     expect(launchPersistentContext).not.toHaveBeenCalled();
     expect(engine.isSessionActive()).toBe(false);
+  });
+
+  it("fences startup before page ownership and closes a raced context", async () => {
+    const { config, artifacts } = await engineFixture();
+    const network = new NetworkService({ rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) }, { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) });
+    const engine = new BrowserSessionEngine(config, artifacts, network);
+    let calls = 0;
+    const launchGuard = vi.fn(() => { calls += 1; if (calls === 3) throw new Error("fenced"); });
+    await expect(engine.startNetworkSession({ accountId: "account-1", runId: "run-1", contextId: "context-1", launchGuard })).rejects.toThrow("fenced");
+    expect(launchGuard).toHaveBeenCalledTimes(3);
+    expect(engine.isSessionActive()).toBe(false);
+  });
+  it("passes deviceProfileKey through startNetworkSession to launchPersistentContext", async () => {
+    const { config, artifacts } = await engineFixture();
+    const network = new NetworkService(
+      { rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) },
+      { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+    );
+    const engine = new BrowserSessionEngine(config, artifacts, network);
+
+    await engine.startNetworkSession({ accountId: "account-1", runId: "run-1", contextId: "context-1", taskId: "task-1", deviceProfileKey: "pixel-7" });
+
+    expect(launchPersistentContext).toHaveBeenCalledWith(expect.stringContaining("pixel-7"), expect.objectContaining({ viewport: { width: 412, height: 839 }, isMobile: true, hasTouch: true }));
+    await engine.close();
+  });
+
+  it("defaults to desktop-chrome when deviceProfileKey is omitted from startNetworkSession", async () => {
+    const { config, artifacts } = await engineFixture();
+    const network = new NetworkService(
+      { rotate: vi.fn().mockResolvedValue(undefined), detectIp: vi.fn().mockResolvedValue({ ip: "1.2.3.4", country: "Japan", region: "Tokyo" }) },
+      { getSetting: () => ({ host: "127.0.0.1", port: 9090, proxyGroup: "Auto", requiredCountry: "Japan", policy: "JP-only", secretConfigured: true }) }
+    );
+    const engine = new BrowserSessionEngine(config, artifacts, network);
+
+    await engine.startNetworkSession({ accountId: "account-1", runId: "run-1", contextId: "context-1" });
+
+    expect(launchPersistentContext).toHaveBeenCalledWith(expect.stringContaining("desktop-chrome"), expect.objectContaining({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false }));
+    await engine.close();
   });
 
   it("retries navigation failures with the configured bounded budget", async () => {
@@ -146,6 +200,18 @@ describe("BrowserSessionEngine", () => {
     expect(artifacts.captureHtmlSnapshot).toHaveBeenCalledOnce();
     expect(page.evaluate).toHaveBeenCalledOnce();
     expect(step).toMatchObject({ beforeState: "Login", afterState: "Login", screenshotRef: "screenshot.png" });
+    await engine.close();
+  });
+
+  it("inspects the active top-level page without performing a browser action", async () => {
+    const { engine, page } = await engineFixture(pageFixture("<form><p>お支払い方法</p><input type='radio' value='payment-convenience'></form>", "https://eplus.jp/apply"));
+    await engine.startSession("account-1");
+
+    const result = await engine.inspectPage({ inspect: async (activePage) => activePage.content() });
+
+    expect(result).toContain("payment-convenience");
+    expect(page.locator).not.toHaveBeenCalled();
+    expect(engine.getCheckpoint()).toBeUndefined();
     await engine.close();
   });
 

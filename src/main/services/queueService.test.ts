@@ -39,6 +39,19 @@ describe("QueueService", () => {
     expect(fixture.db.listLogs().some((log) => log.message === "queue.run.failed")).toBe(true);
   });
 
+  it("rejects manual continuation when payment checkpoint is missing", async () => {
+    const fixture = await createFixture(["one"]);
+    const orchestrator = {
+      runSingleAccount: vi.fn(async ({ run }: { run: AccountRun }) => { fixture.db.updateRun({ id: run.id, status: "AwaitingManualAction", paymentState: "PaymentSelectionPending" }); return fixture.db.listRuns()[0] ?? run; }),
+      reconcile: vi.fn()
+    };
+    const queue = new QueueService(orchestrator, fixture.db);
+    await queue.enqueueTask(fixture.task);
+    const run = fixture.db.listRunsForTask(fixture.task.id)[0];
+    if (!run) throw new Error("Expected fixture run.");
+    await expect(queue.performManualAction({ runId: run.id, action: "continue" })).rejects.toThrow("Payment checkpoint is missing");
+    expect(queue.getState().queue).toHaveLength(0);
+  });
   it("pauses at a manual checkpoint and rejects stale continuation", async () => {
     const fixture = await createFixture(["one", "two"]);
     const orchestrator = {

@@ -1,3 +1,6 @@
+import type { NetworkNode } from "../../shared/types.js";
+export type { NetworkNode } from "../../shared/types.js";
+
 export interface IpInfo {
   readonly ip: string;
   readonly region: string;
@@ -12,17 +15,13 @@ export interface ClashConfig {
   readonly proxyGroup: string;
 }
 
-export interface NodeInfo {
-  readonly name: string;
-  readonly type: string;
-  readonly alive: boolean;
-  readonly delay?: number;
-}
+type NodeInfo = NetworkNode;
 
 export interface NetworkRotationProvider {
   detectIp(): Promise<IpInfo>;
   rotate(): Promise<void>;
   listNodes?(): Promise<readonly NodeInfo[]>;
+  selectNode?(name: string): Promise<void>;
 }
 
 type Fetcher = typeof fetch;
@@ -75,6 +74,19 @@ export class ClashControllerProvider implements NetworkRotationProvider {
       const delay = delays.get(name);
       return delay === undefined ? { name, type: "proxy", alive: true } : { name, type: "proxy", alive: true, delay };
     });
+  }
+
+  async selectNode(name: string): Promise<void> {
+    const group = await this.fetchGroup();
+    const nodes = readStringArray(group, "all");
+    if (!nodes.includes(name)) throw new Error("Requested proxy node is not available in the configured group.");
+    const response = await this.fetcher(this.groupUrl(), {
+      method: "PUT",
+      headers: { ...this.headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) throw new Error(`Clash node selection failed: HTTP ${response.status}`);
   }
 
   private async fetchGroup(): Promise<Record<string, unknown>> {

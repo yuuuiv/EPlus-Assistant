@@ -1,7 +1,9 @@
+import { load } from "cheerio";
 import type { ParsedEplusPage } from "../services/eplusPageParser.js";
 
 export type PageState =
   | "Login"
+  | "SerialCode"
   | "EmailCode"
   | "CaptchaSliderDevice"
   | "InterstitialConsent"
@@ -39,6 +41,7 @@ const VERIFIED_SELECTOR_HINTS = {
 const MANUAL_ACTION_HINTS: readonly string[] = [];
 const LOGIN_ACTION_HINTS = ["fill email", "fill password", "click login"] as const;
 const EMAIL_CODE_ACTION_HINTS = ["fill verification code", "submit verification code"] as const;
+const SERIAL_CODE_ACTION_HINTS = ["fill serial code", "submit serial code"] as const;
 const INTERSTITIAL_ACTION_HINTS = ["review notice", "click confirmation"] as const;
 const CHECKBOX_GATE_ACTION_HINTS = ["request manual confirmation"] as const;
 const DAY_SELECTION_ACTION_HINTS = ["select requested day"] as const;
@@ -64,6 +67,17 @@ function hasNamedInput(html: string, pattern: RegExp): boolean {
   return new RegExp(`<input\\b[^>]*(?:name|id|autocomplete)\\s*=\\s*["'][^"']*${pattern.source}[^"']*["'][^>]*>`, "iu").test(
     html
   );
+}
+
+function hasPhoneChallengeEvidence(html: string, text: string): boolean {
+  const $ = load(html);
+  const phoneInput = $("input, select, textarea").toArray().some((element) => {
+    const type = $(element).attr("type")?.toLowerCase();
+    const key = `${$(element).attr("name") ?? ""} ${$(element).attr("id") ?? ""} ${$(element).attr("autocomplete") ?? ""} ${$(element).attr("aria-label") ?? ""}`;
+    return type !== "hidden" && /phone|tel|telephone|mobile|sms|電話|携帯/iu.test(key);
+  });
+  return phoneInput ||
+    /電話番号を入力|携帯電話番号を入力|SMS.*(?:認証|コード)/iu.test(text);
 }
 
 function containsVerifiedSelectorMarkup(html: string, selector: string): boolean {
@@ -120,10 +134,14 @@ export function classifyPageState(input: ClassifierInput): ClassificationResult 
     return result("ReceptionClosed", 0.99, "Matched closed reception text: 受付は終了.", MANUAL_ACTION_HINTS, true);
   }
 
+  if (/シリアル(?:コード|ナンバー|番号)?|抽選コード|応募コード/iu.test(text) && hasNamedInput(input.html, /ninsho|serial/iu)) {
+    return result("SerialCode", 0.96, "Matched serial-code entry text and ninsho/serial input evidence.", SERIAL_CODE_ACTION_HINTS, false);
+  }
+
   if (
     /<(?:iframe)\b[^>]*(?:recaptcha|hcaptcha)[^>]*>/iu.test(input.html) ||
     /(?:captcha[-_ ]?slider|slider[-_ ]?captcha)/iu.test(input.html) ||
-    /電話番号認証が必要/iu.test(text)
+    hasPhoneChallengeEvidence(input.html, text)
   ) {
     return result(
       "CaptchaSliderDevice",
@@ -138,11 +156,11 @@ export function classifyPageState(input: ClassifierInput): ClassificationResult 
     return result("Receipt", 0.97, "Matched receipt evidence: 受付番号 or 申込完了.", MANUAL_ACTION_HINTS, false);
   }
 
-  if (/\/login(?:[/?#]|$)/iu.test(input.url) || (hasInput(input.html, "email") && hasInput(input.html, "password"))) {
+  if (/\/login(?:[/?#]|$)/iu.test(input.url) || ((hasInput(input.html, "email") || hasNamedInput(input.html, /login[_-]?id|login[_-]?email|メールアドレス/iu)) && hasInput(input.html, "password"))) {
     return result("Login", 0.95, "Matched login URL or email and password form fields.", LOGIN_ACTION_HINTS, false);
   }
 
-  if (/認証コード|確認コード/iu.test(text) || hasNamedInput(input.html, /verification|code|ninsho/iu)) {
+  if (/認証コード|確認コード/iu.test(text) || hasNamedInput(input.html, /verification|code/iu)) {
     return result("EmailCode", 0.93, "Matched verification-code text or input field.", EMAIL_CODE_ACTION_HINTS, false);
   }
 

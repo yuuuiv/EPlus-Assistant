@@ -80,6 +80,22 @@ describe("pageStateClassifier", () => {
 
       expect(classified.state).toBe("Receipt");
     });
+
+  it("recognizes a serial form before the phone-verification notice", () => {
+      const classified = classifyFixture(
+        "https://eplus.jp/serial/mygo_3rdAL",
+        `<h1>シリアル先行</h1><p>電話番号認証が必要です。</p><input name="ninsho_key1_1" placeholder="シリアルコード"><button name="action" value="moushikomi">お申込みへ</button>`
+      );
+
+      expect(classified.state).toBe("SerialCode");
+      expect(classified.requiresManualTakeover).toBe(false);
+      expect(classified.safeActionHints).toContain("fill serial code");
+    });
+  });
+
+  it("does not treat a generic phone notice as a phone login challenge", () => {
+    const classified = classifyPageState({ html: "<main><p>電話番号認証が必要</p><h1>抽選受付</h1></main>", url: "https://eplus.jp/sf/detail/1", selectors: defaultSelectorHints() });
+    expect(classified.state).not.toBe("CaptchaSliderDevice");
   });
 
   describe("unknown/changed markup", () => {

@@ -14,6 +14,7 @@ export type AccountRunStatus =
   | "Pending"
   | "LoggingIn"
   | "AwaitingEmailCode"
+  | "AwaitingCompletionEmail"
   | "AwaitingManualAction"
   | "FillingForm"
   | "AwaitingSubmitConfirmation"
@@ -23,6 +24,121 @@ export type AccountRunStatus =
   | "UnknownSubmissionState"
   | "Failed"
   | "Cancelled";
+
+export type PaymentRunState =
+  | "Idle"
+  | "PaymentDiscoveryPending"
+  | "PaymentSelectionPending"
+  | "PaymentSelectionApplied"
+  | "Submitting"
+  | "UnknownSubmissionState";
+
+export type DeviceProfileKey = "desktop-chrome" | "iphone-13" | "pixel-7";
+
+export interface SelectorEvidence {
+  scope: "document";
+  tag: "select" | "input" | "button";
+  groupOrdinal: number;
+  optionOrdinal: number;
+  allowedAttributes: {
+    id?: string;
+    name?: string;
+    type?: string;
+    role?: string;
+    dataPaymentGroup?: string;
+  };
+  contextGeneration: string;
+}
+
+export interface RuntimePaymentOption {
+  candidateId: string;
+  groupKey: string;
+  groupOrder: number;
+  optionOrder: number;
+  controlType: "select" | "input" | "button";
+  domValue: string;
+  label: string;
+  enabled: boolean;
+  supported: boolean;
+  ambiguous: boolean;
+  selectorEvidence: SelectorEvidence;
+}
+
+export interface PaymentOptionGroup {
+  groupKey: string;
+  groupOrder: number;
+  controlType: "select" | "input" | "button";
+  selectorEvidence: SelectorEvidence;
+  options: RuntimePaymentOption[];
+}
+
+export interface PaymentPreference {
+  groupKey: string;
+  value: string;
+}
+
+export interface PaymentDiscoveryCheckpoint {
+  taskId: string;
+  runId: string;
+  checkpointId: string;
+  checkpointRevision: number;
+  pageFingerprint: string;
+  controlFingerprint: string;
+  contextGeneration: string;
+  groups: PaymentOptionGroup[];
+  candidateIds: string[];
+  groupKeys: Record<string, string[]>;
+  discoveredAt: string;
+  deviceProfileKey: DeviceProfileKey;
+}
+
+export interface PaymentSelectionInput {
+  taskId: string;
+  runId: string;
+  checkpointId: string;
+  checkpointRevision: number;
+  candidateIds: string[];
+  expectedControlFingerprint: string;
+}
+
+export interface SubmissionDispatchInput {
+  taskId: string;
+  runId: string;
+  authorizationRevision: number;
+  nonce: string;
+}
+
+export interface PaymentSelection {
+  groupKey: string;
+  candidateId: string;
+  domValue: string;
+}
+
+export interface DispatchLease {
+  leaseId: string;
+  issuedAt: string;
+  heartbeatAt: string;
+  workerPid: number;
+  workerProcessStartTime: string;
+  contextOwnerToken: string;
+  recoveryRevision: number;
+  recoveryFenceToken: string;
+  revokedAt?: string;
+}
+
+export interface RecoveryFence {
+  runId: string;
+  submissionRecoveryRevision: number;
+  recoveryFenceToken: string;
+  fencedAt: string;
+}
+
+export class PaymentValidationError extends Error {
+  constructor(readonly code: "InvalidDeviceProfile" | "SensitivePaymentField" | "StalePaymentCheckpoint" | "InvalidPaymentSelection" | "DispatchGuardRejected" | "RecoveryFenceRejected", message: string) {
+    super(message);
+    this.name = "PaymentValidationError";
+  }
+}
 
 export interface Account {
   id: string;
@@ -53,6 +169,7 @@ export interface EventOption {
   kind: "ticket" | "quantity" | "rank" | "payment" | "delivery" | "consent" | "unknown";
   values: Array<{ id: string; label: string; disabled?: boolean }>;
   required: boolean;
+  runtimeGroup?: PaymentOptionGroup;
 }
 
 export interface EplusApplicationLink {
@@ -105,12 +222,24 @@ export interface LotteryPreferenceEntry {
   optionalDateOrShowId?: string;
 }
 
+/** Per-code choices. A single serial code is one application run, while its
+ * selected days and entry can differ from another code on the same account. */
+export interface SerialCodePlan {
+  code: string;
+  daySelection?: Array<"day1" | "day2">;
+  applicationLinkId?: string;
+  entries?: LotteryPreferenceEntry[];
+}
+
 export interface LotteryPreference {
   entries: LotteryPreferenceEntry[];
-  paymentMethodId: string;
+  paymentMethodId?: string;
+  paymentPreference?: PaymentPreference;
   deliveryMethodId?: string;
   serialCode?: string;
   serialCodesByAccountId?: Record<string, string>;
+  /** Explicit one-to-many allocation used to create one run per serial code. */
+  serialCodeAllocations?: Record<string, SerialCodePlan[]>;
   daySelectionByAccountId?: Record<string, Array<"day1" | "day2">>;
   applicationLinkId?: string;
   consentFlags: Record<string, boolean>;
@@ -135,6 +264,18 @@ export interface SubmissionAuthorization {
   createdAt: string;
   expiresAt: string;
   consumed: boolean;
+  authorizationRevision?: number;
+  nonce?: string;
+  revokedAt?: string;
+  consumedAt?: string;
+  checkpointRevision?: number;
+  deviceProfileKey?: DeviceProfileKey;
+  deviceRegistryDigest?: string;
+  pageFingerprint?: string;
+  controlFingerprint?: string;
+  selectedOptions?: PaymentSelection[];
+  submissionRecoveryRevision?: number;
+  recoveryFenceToken?: string;
 }
 
 export type SubmissionIntentStatus = "Prepared" | "Dispatching" | "Acknowledged" | "Unknown" | "Failed";
@@ -163,22 +304,33 @@ export interface NetworkLease {
 }
 
 export interface NetworkSettings {
+  controller: "clash" | "sing-box";
   host: string;
   port: number;
   proxyGroup: string;
   requiredCountry: string;
   policy: string;
   secretConfigured: boolean;
+  proxyGroups?: string[];
   updatedAt?: string;
 }
 
 export interface NetworkSettingsUpdate {
+  controller: "clash" | "sing-box";
   host: string;
   port: number;
   secret?: string;
   proxyGroup: string;
   requiredCountry: string;
   policy: string;
+  proxyGroups?: string[];
+}
+
+export interface NetworkNode {
+  name: string;
+  type: string;
+  alive: boolean;
+  delay?: number;
 }
 
 export interface PasswordRevealRequest {
@@ -212,10 +364,18 @@ export interface AccountProfile {
   gender?: string;
   birthday?: string;
   address?: string;
+  /** Only non-sensitive card metadata is stored; PAN/CVV/expiry are never persisted. */
+  creditCards?: CreditCardSummary[];
   companions: Companion[];
   pastCompanions: Companion[];
   harvestedAt: string;
   harvestStatus: "Pending" | "Ok" | "Partial" | "Failed";
+}
+
+export interface CreditCardSummary {
+  brand?: string;
+  last4: string;
+  updatedAt?: string;
 }
 
 export interface ApplicationRecord {
@@ -278,6 +438,7 @@ export interface LotteryTask {
   accountIds: string[];
   status: TaskStatus;
   confirmationDigest: string;
+  deviceProfileKey?: DeviceProfileKey;
   createdAt: string;
   updatedAt: string;
 }
@@ -286,7 +447,15 @@ export interface AccountRun {
   id: string;
   taskId: string;
   accountId: string;
+  /** The serial code consumed by this individual application attempt, if any. */
+  serialCode?: string;
+  serialPlan?: SerialCodePlan;
   status: AccountRunStatus;
+  paymentState: PaymentRunState;
+  paymentCheckpoint?: PaymentDiscoveryCheckpoint;
+  selectedPaymentOptions?: PaymentSelection[];
+  submissionRecoveryRevision?: number;
+  recoveryFenceToken?: string;
   externalApplicationId?: string;
   resumeCheckpoint: Record<string, unknown>;
   errorCode?: string;
@@ -305,7 +474,7 @@ export interface AuditLog {
   createdAt: string;
 }
 
-export type VerificationMailboxMode = "manual" | "imap" | "http-api" | "temp-mail-forwarder" | "auth-mailbox";
+export type VerificationMailboxMode = "manual" | "imap" | "http-api" | "temp-mail-forwarder" | "auth-mailbox" | "cerise-bouquet";
 
 export interface VerificationMailboxSettings {
   providerId: string;
@@ -374,6 +543,7 @@ export interface CreateTaskInput {
   eventSnapshotId: string;
   preference: LotteryPreference;
   accountIds: string[];
+  deviceProfileKey?: DeviceProfileKey;
 }
 
 export interface CreateTaskInputV2 extends CreateTaskInput {

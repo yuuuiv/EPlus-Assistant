@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { AccountProfile, ApplicationRecord, Companion } from "../../shared/types.js";
+import type { AccountProfile, ApplicationRecord, Companion, LotteryResultRecord } from "../../shared/types.js";
 import { EplusBrowserAdapter } from "../adapters/eplusAdapter.js";
 import { BrowserEngineFailure, type BrowserSessionEngine } from "../engines/browserSessionEngine.js";
 import type { AppDatabase } from "../storage/database.js";
 
 export type HarvestResult = "Ok" | "Partial" | "Failed" | "AwaitingManualAction";
+
+export interface ProfileMailAttribution {
+  readCode?(input: { accountId: string; startedAt: string }): Promise<{ code?: string; manualActionRequired: boolean }>;
+}
 
 export interface HarvestRunResult {
   readonly runId: string;
@@ -12,6 +16,7 @@ export interface HarvestRunResult {
   readonly profile?: Partial<AccountProfile>;
   readonly companions?: readonly Companion[];
   readonly applicationRecords?: readonly ApplicationRecord[];
+  readonly lotteryResults?: readonly LotteryResultRecord[];
   readonly harvestedFields: readonly string[];
   readonly failedFields: readonly string[];
   readonly errorDetail?: string;
@@ -21,7 +26,9 @@ export class ProfileHarvester {
   constructor(
     private readonly engine: BrowserSessionEngine,
     private readonly adapter: EplusBrowserAdapter,
-    private readonly db: AppDatabase
+    private readonly db: AppDatabase,
+    private readonly decryptSecret?: (cipherText: string) => string,
+    private readonly mailAttribution?: ProfileMailAttribution
   ) {}
 
   async harvest(input: { readonly accountId: string; readonly existingSession?: boolean }): Promise<HarvestRunResult> {
@@ -41,7 +48,13 @@ export class ProfileHarvester {
 
       const basic = await this.readBasicProfile(failedFields);
       harvestedFields.push(...presentProfileFields(basic));
-      let profile = mergeProfile({ accountId: input.accountId, existing, storedAccount, basic });
+      const phone = await this.readPhone(failedFields);
+      if (phone) harvestedFields.push("phone");
+      const address = await this.readAddress(failedFields);
+      if (address) harvestedFields.push("address");
+      const creditCards = await this.readCreditCards(failedFields);
+      if (creditCards) harvestedFields.push("creditCards");
+      let profile = mergeProfile({ accountId: input.accountId, existing, storedAccount, basic: { ...basic, phone: phone ?? basic.phone, address: address ?? basic.address, creditCards: creditCards ?? basic.creditCards } });
       this.db.upsertProfile(profile);
       const companionData = await this.readCompanions(failedFields);
       if (companionData) {
@@ -51,18 +64,21 @@ export class ProfileHarvester {
       }
       const applicationRecords = await this.readApplications(input.accountId, failedFields);
       if (applicationRecords) harvestedFields.push("applicationRecords");
+      const lotteryResults = await this.readLotteryResults(input.accountId);
+      if (lotteryResults) harvestedFields.push("lotteryResults");
 
       const status = failedFields.length === 0 ? "Ok" : "Partial";
       profile = { ...profile, harvestedAt: new Date().toISOString(), harvestStatus: status };
       this.db.upsertProfile(profile);
       applicationRecords?.forEach((record) => this.db.addApplicationRecord(record));
+      lotteryResults?.forEach((record) => this.db.addLotteryResult(record));
       this.db.updateProfileHarvestRun({
         id: runId,
         status: "Completed",
         harvestedFields,
         completedAt: new Date().toISOString()
       });
-      return { runId, status, profile, companions: profile.companions, applicationRecords, harvestedFields, failedFields };
+      return { runId, status, profile, companions: profile.companions, applicationRecords, lotteryResults, harvestedFields, failedFields };
     } catch (error) {
       if (isManualTakeover(error)) {
         const errorDetail = "Manual action is required before profile harvesting can continue.";
@@ -84,9 +100,22 @@ export class ProfileHarvester {
     if (input.existingSession && this.engine.isSessionActive() && (await this.engine.reuseSession())) return;
     if (this.engine.isSessionActive()) await this.engine.close();
     await this.engine.startSession(input.accountId);
-    const state = await this.adapter.detectChallenge();
-    if (state === "Login" || state === "EmailCode") {
-      throw new BrowserEngineFailure("ManualTakeoverRequired", "An interactive login is required.");
+    await this.adapter.openMemberProfile();
+    let state = await this.adapter.detectChallenge();
+    if (state === "Login") {
+      const account = this.db.getStoredAccount(input.accountId);
+      if (!account || !this.decryptSecret) throw new BrowserEngineFailure("ManualTakeoverRequired", "Stored account credentials are unavailable for automatic profile login.");
+      await this.adapter.login(account.eplusEmail, this.decryptSecret(account.encryptedEplusPassword));
+      state = await this.adapter.detectChallenge();
+    }
+    if (state === "EmailCode") {
+      const result = await this.mailAttribution?.readCode?.({ accountId: input.accountId, startedAt: new Date().toISOString() });
+      if (!result?.code || result.manualActionRequired) throw new BrowserEngineFailure("ManualTakeoverRequired", "The verification email could not be safely attributed.");
+      await this.adapter.enterEmailCode(result.code);
+      state = await this.adapter.detectChallenge();
+    }
+    if (state === "Login" || state === "EmailCode" || state === "CaptchaSliderDevice" || state === "CheckboxGate" || state === "Unknown") {
+      throw new BrowserEngineFailure("ManualTakeoverRequired", "Profile login requires manual browser verification.");
     }
   }
 
@@ -116,6 +145,37 @@ export class ProfileHarvester {
     }
   }
 
+  private async readPhone(failedFields: string[]): Promise<string | undefined> {
+    try {
+      await this.adapter.openPhoneNumber();
+      return await this.adapter.readPhoneNumber();
+    } catch (error) {
+      if (isManualTakeover(error)) throw error;
+      return undefined;
+    }
+  }
+
+  private async readAddress(failedFields: string[]): Promise<string | undefined> {
+    try {
+      await this.adapter.openShippingAddress();
+      return await this.adapter.readShippingAddress();
+    } catch (error) {
+      if (isManualTakeover(error)) throw error;
+      return undefined;
+    }
+  }
+
+  private async readCreditCards(failedFields: string[]): Promise<Awaited<ReturnType<EplusBrowserAdapter["readCreditCards"]>> | undefined> {
+    if (typeof this.adapter.openCreditCard !== "function" || typeof this.adapter.readCreditCards !== "function") return undefined;
+    try {
+      await this.adapter.openCreditCard();
+      return await this.adapter.readCreditCards();
+    } catch (error) {
+      if (isManualTakeover(error)) throw error;
+      return undefined;
+    }
+  }
+
   private async readApplications(accountId: string, failedFields: string[]): Promise<ApplicationRecord[] | undefined> {
     try {
       await this.adapter.openApplicationHistory();
@@ -124,6 +184,17 @@ export class ProfileHarvester {
     } catch (error) {
       if (isManualTakeover(error)) throw error;
       failedFields.push("applicationRecords");
+      return undefined;
+    }
+  }
+
+  private async readLotteryResults(accountId: string): Promise<LotteryResultRecord[] | undefined> {
+    try {
+      await this.adapter.openLotteryResults();
+      const harvestedAt = new Date().toISOString();
+      return (await this.adapter.readLotteryResults()).map((record) => ({ id: randomUUID(), accountId, harvestedAt, ...record }));
+    } catch (error) {
+      if (isManualTakeover(error)) throw error;
       return undefined;
     }
   }
@@ -149,6 +220,7 @@ function mergeProfile(input: {
     gender: input.basic.gender ?? input.existing?.gender,
     birthday: input.basic.birthday ?? input.existing?.birthday,
     address: input.basic.address ?? input.existing?.address,
+    creditCards: [...(input.basic.creditCards ?? input.existing?.creditCards ?? [])],
     companions: [...(input.existing?.companions ?? [])],
     pastCompanions: [...(input.existing?.pastCompanions ?? [])],
     harvestedAt: new Date().toISOString(),

@@ -10,6 +10,6 @@ export function createMockApi(): ElectronApi {
     refreshApplicationRecords: vi.fn(), refreshLotteryResults: vi.fn(), reconcileSubmission: vi.fn(), listProfiles: vi.fn(), listCompanions: vi.fn(),
     listApplicationRecords: vi.fn(), listLotteryResults: vi.fn(), saveVerificationMailbox: vi.fn(), testVerificationMailbox: vi.fn(),
     readVerificationCode: vi.fn(), getNetworkSettings: vi.fn(), saveNetworkSettings: vi.fn(), detectIp: vi.fn(), rotateIp: vi.fn(),
-    addLog: vi.fn(), openDataFolder: vi.fn()
+    openDataFolder: vi.fn()
   };
 }

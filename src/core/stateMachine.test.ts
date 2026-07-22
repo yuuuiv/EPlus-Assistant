@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canTransitionRun, canTransitionSubmissionIntent, canTransitionTask } from "./stateMachine.js";
+import { canResumeManualAction, canTransitionPaymentRun, canTransitionRun, canTransitionSubmissionIntent, canTransitionTask, isPaymentStateAllowedForRun } from "./stateMachine.js";
 
 describe("lottery state machine", () => {
   it("allows the documented task path", () => {
@@ -32,5 +32,22 @@ describe("lottery state machine", () => {
     expect(canTransitionTask("Queued", "Running")).toBe(true);
     expect(canTransitionRun("Pending", "LoggingIn")).toBe(true);
     expect(canTransitionRun("Pending", "Submitting")).toBe(false);
+  });
+
+  it("allows the locked payment lifecycle and rejects direct manual submission", () => {
+    expect(canTransitionPaymentRun("Idle", "PaymentDiscoveryPending")).toBe(true);
+    expect(canTransitionPaymentRun("PaymentSelectionPending", "PaymentSelectionApplied")).toBe(true);
+    expect(canTransitionRun("AwaitingManualAction", "Submitting")).toBe(false);
+    expect(isPaymentStateAllowedForRun("AwaitingSubmitConfirmation", "PaymentSelectionApplied")).toBe(true);
+    expect(isPaymentStateAllowedForRun("Submitting", "PaymentSelectionApplied")).toBe(false);
+    expect(canResumeManualAction("PaymentDiscoveryPending")).toBe(true);
+    expect(canResumeManualAction("PaymentSelectionPending")).toBe(true);
+    expect(canResumeManualAction("PaymentSelectionApplied")).toBe(false);
+  });
+
+  it("keeps recovery read-only and disallows payment-state skips", () => {
+    expect(canTransitionPaymentRun("PaymentDiscoveryPending", "PaymentSelectionApplied")).toBe(false);
+    expect(canTransitionPaymentRun("UnknownSubmissionState", "PaymentSelectionApplied")).toBe(false);
+    expect(canTransitionRun("UnknownSubmissionState", "AwaitingManualAction")).toBe(false);
   });
 });
