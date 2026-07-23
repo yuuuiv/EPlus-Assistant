@@ -39,6 +39,7 @@
     "appId": "dev.eplus-assistant.desktop",
     "productName": "Eplus 账号管理器",
     "asar": true,
+    "publish": null,
     "files": [
       "dist/**/*",
       "dist-electron/main/**/*",
