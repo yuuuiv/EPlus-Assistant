@@ -22,7 +22,7 @@
   --theme-transition: 240ms var(--ease-out);
 
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  font-size: 14px;
+  font-size: 15.5px;
   line-height: 1.5;
 }
 
@@ -274,7 +274,7 @@ button, input, select, textarea { font: inherit; }
 .workspace-panel > *:nth-child(4) { animation-delay: 120ms; }
 .workspace-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
 .workspace-heading h1 { margin: 0; background: none; -webkit-text-fill-color: currentColor; color: var(--text); font-size: 1.7rem; }
-.workspace-heading p { margin: var(--space-1) 0 0; color: var(--text-muted); max-inline-size: 60ch; }
+.workspace-heading p { margin: var(--space-1) 0 0; color: var(--text-muted); max-inline-size: 100%; }
 .section-kicker { color: var(--primary) !important; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; }
 .panel-layout-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr)); gap: var(--space-4); }
 /* flex (not grid) so `.actions` can sink to the bottom via margin-top:auto when a
@@ -607,19 +607,20 @@ table { width: 100%; border-collapse: collapse; }
 th {
   text-align: left;
   padding: 0.6rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-subtle);
   border-bottom: 1px solid var(--border);
   background: var(--surface-d);
+  vertical-align: top;
 }
 
 td {
   text-align: left;
   padding: 0.65rem 0.75rem;
-  font-size: 0.875rem;
+  font-size: 0.94rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
@@ -627,6 +628,43 @@ td {
 tbody tr { transition: background var(--transition); }
 tbody tr:hover { background: var(--bg-hover); }
 tbody tr:last-child td { border-bottom: none; }
+
+/* Short categorical values (status, gender, counts) never break mid-word; free-text columns
+   (tour titles etc.) keep wrapping normally so long names don't force a table to scroll. */
+.th-nowrap, .td-nowrap { white-space: nowrap; }
+
+/* ── Sortable/filterable table headers ──────────────────────────────── */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  box-shadow: none;
+}
+.th-sort:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--primary); }
+.th-sort:disabled { cursor: default; opacity: 1; background: transparent; }
+.th-sort-idle { opacity: 0.35; }
+.th-filter {
+  display: block;
+  margin-top: 0.45rem;
+  width: 100%;
+  min-width: 6rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
 
 /* ── Status badges ───────────────────────────────────────────────────── */
 .badge {
@@ -844,6 +882,80 @@ tbody tr:last-child td { border-bottom: none; }
   padding-top: 0.9rem;
   border-top: 1px solid var(--border);
 }
+
+/* ── Hero panel (导入采集文件 as the app's primary entry point) ─────────── */
+.panel-card-hero {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  background:
+    radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--primary) 6%, transparent), transparent 60%),
+    var(--bg-surface);
+}
+.panel-card-hero .panel-head h2 { font-size: 1.02rem; }
+
+/* ── Section divider (labels a lower-emphasis group of panels, e.g. manual add) ── */
+.section-divider { display: flex; align-items: center; gap: var(--space-3); color: var(--text-subtle); font-size: 0.78rem; }
+.section-divider::before, .section-divider::after { content: ""; flex: 1 1 auto; block-size: 1px; background: var(--border); }
+
+/* ── Nested performance list inside the account overview table ─────────── */
+.performance-list { margin: 0; }
+.performance-list table { background: var(--surface-d); }
+
+/* ── Modal (floating dialog for account/performance detail) ────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: rgba(6, 8, 14, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  animation: modal-overlay-in 160ms var(--ease-out) both;
+}
+.modal-dialog {
+  width: min(50rem, 100%);
+  max-block-size: min(88vh, 62rem);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-solid);
+  box-shadow: var(--shadow-lg);
+  animation: modal-in 180ms var(--ease-out) both;
+  outline: none;
+}
+.modal-dialog-wide { width: min(74rem, 100%); }
+.modal-head { margin-bottom: 0; }
+.modal-body { min-block-size: 0; display: grid; gap: var(--space-4); }
+@keyframes modal-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in { from { opacity: 0; transform: scale(0.97) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay, .modal-dialog { animation: none; }
+}
+
+/* ── Stat hero tiles (account overview headline numbers) ────────────────── */
+.stat-hero { padding: var(--space-5); }
+.stat-tile-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--space-4); }
+.stat-tile { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-a); }
+.stat-tile-icon { display: grid; place-items: center; inline-size: 3rem; block-size: 3rem; border-radius: var(--radius); flex: 0 0 auto; }
+.stat-tile-text { display: grid; gap: 0.15rem; min-width: 0; }
+.stat-tile-label { color: var(--text-muted); font-size: 0.82rem; }
+.stat-tile-value { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ── Charts ──────────────────────────────────────────────────────────── */
+.chart-svg { display: block; width: 100%; height: auto; }
+
+/* ── Activity feed / ranking lists (overview: recent draws, hottest shows) ── */
+.activity-list, .ranking-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; max-block-size: 26rem; overflow: auto; }
+.activity-item, .ranking-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-d); }
+.activity-item .badge, .ranking-item .badge { flex: 0 0 auto; }
+.activity-item-text { display: grid; gap: 0.15rem; min-width: 0; flex: 1 1 auto; }
+.activity-item-text strong { font-weight: 600; overflow-wrap: anywhere; }
+.ranking-index { display: grid; place-items: center; flex: 0 0 auto; inline-size: 1.8rem; block-size: 1.8rem; border-radius: 50%; background: var(--primary-dim); color: var(--primary); font-weight: 700; font-size: 0.85rem; }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 1300px) {

@@ -27,6 +27,7 @@ describe("IPC Security", () => {
       "account:reveal-password",
       "profile:get",
       "profile:list-lottery-records",
+      "stats:get-overview",
       "app:open-data-folder"
     ]));
   });
@@ -69,6 +70,25 @@ describe("IPC Security", () => {
       }
     });
     expect(result).toMatchObject({ accountId: fixture.accountId, accountCreated: false, report: { inserted: 1 } });
+  });
+
+  it("account:import-harvest tolerates the userscript's extra harvestedPages field instead of rejecting it", async () => {
+    const fixture = await createFixture();
+    const importHarvest = requireHandler("account:import-harvest");
+
+    const result = await importHarvest(rendererEvent(fixture.webContents), {
+      payload: {
+        schemaVersion: 1,
+        eplusEmail: fixture.accountEmail,
+        collectedAt: "2026-07-23T00:00:00.000Z",
+        profile: { name: "Taro" },
+        creditCards: [],
+        companions: [],
+        lotteryRecords: [],
+        harvestedPages: { "update-member": "2026-07-23T00:00:00.000Z" }
+      }
+    });
+    expect(result).toMatchObject({ accountId: fixture.accountId, accountCreated: false });
   });
 });
 

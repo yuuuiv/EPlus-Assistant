@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eplus 会员信息采集器
 // @namespace    eplus-assistant
-// @version      1.2.1
+// @version      1.3.0
 // @description  在 eplus.jp / member.eplus.jp / orderhistory.eplus.jp 上引导采集会员资料、抽选记录，展示当前 IP/来源地，一键导出统一 JSON，并支持登录页一键填写
 // @author       yuuuiv
 // @license      MIT
@@ -114,6 +114,29 @@
 
   function saveHarvest(harvest) {
     GM_setValue(STORAGE_KEYS.harvest, JSON.stringify(harvest));
+  }
+
+  // ---------------------------------------------------------------------
+  // Session boundary - one browser window (including a private/incognito
+  // window) is meant to collect exactly one account. GM_setValue is a single
+  // bucket shared by every window/tab the script runs in - normal or
+  // incognito alike - so without this, opening a fresh incognito window to
+  // start a new account still shows the previous account's "已采集" state.
+  //
+  // window.name is one of the few things that survives cross-origin
+  // navigation within the same tab (this script spans eplus.jp,
+  // member.eplus.jp, orderhistory.eplus.jp) yet is always empty on a brand
+  // new tab/window. So: empty window.name => first load in this tab => wipe
+  // the harvest bucket and stamp a session marker; non-empty and already
+  // ours => same tab continuing across pages => leave the harvest alone.
+  // ---------------------------------------------------------------------
+
+  var SESSION_NAME_PREFIX = 'eplus-collector-session:';
+
+  function ensureFreshSession() {
+    if (typeof window.name === 'string' && window.name.indexOf(SESSION_NAME_PREFIX) === 0) return;
+    saveHarvest(emptyHarvest());
+    window.name = SESSION_NAME_PREFIX + Date.now() + '-' + Math.random().toString(36).slice(2);
   }
 
   function mergeById(existing, incoming, idField) {
@@ -976,6 +999,7 @@
   }
 
   function init() {
+    ensureFreshSession();
     render();
     loadIpInfo(refreshIpSection);
     const pageDef = currentPageDef();

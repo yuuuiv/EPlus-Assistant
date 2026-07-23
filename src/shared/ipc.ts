@@ -2,6 +2,7 @@ import type {
   Account,
   AccountInput,
   AccountProfile,
+  AccountsOverview,
   DashboardState,
   HarvestImportPayload,
   ImportHarvestResult,
@@ -32,6 +33,7 @@ export interface ElectronApi {
   revealPassword(accountId: string): Promise<PasswordRevealResponse>;
   listProfiles(accountId: string): Promise<AccountProfile | undefined>;
   listLotteryRecords(accountId: string): Promise<LotteryRecord[]>;
+  getAccountsOverview(): Promise<AccountsOverview>;
   openDataFolder(): Promise<void>;
 }
 
@@ -43,7 +45,10 @@ declare global {
 
 export type {
   Account,
+  AccountLotteryStats,
+  AccountOverviewEntry,
   AccountProfile,
+  AccountsOverview,
   AuditLog,
   Companion,
   CreditCardSummary,
@@ -51,6 +56,9 @@ export type {
   HarvestImportPayload,
   ImportHarvestResult,
   ImportReport,
+  LotteryOutcome,
   LotteryRecord,
-  PasswordRevealResponse
+  PasswordRevealResponse,
+  PerformanceHistory,
+  TopPerformanceEntry
 } from "./types.js";

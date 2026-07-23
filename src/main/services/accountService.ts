@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { Account, AccountInput, AccountProfile, HarvestImportPayload, ImportHarvestResult, ImportReport, LotteryRecord, PasswordRevealResponse } from "../../shared/types.js";
+import type { Account, AccountInput, AccountProfile, AccountsOverview, HarvestImportPayload, ImportHarvestResult, ImportReport, LotteryRecord, PasswordRevealResponse } from "../../shared/types.js";
 import { SecretStore } from "../storage/secretStore.js";
 import type { AppDatabase } from "../storage/database.js";
 import { normalizeHarvestImport, parseAccountImport } from "./importService.js";
+import { buildAccountsOverview } from "./statsService.js";
 
 export class AccountService {
   constructor(
@@ -11,7 +12,8 @@ export class AccountService {
   ) {}
 
   listAccounts(): Account[] {
-    return this.db.listAccounts();
+    const profileByAccount = new Map(this.db.listAllProfiles().map((profile) => [profile.accountId, profile]));
+    return this.db.listAccounts().map((account) => ({ ...account, profileUpdatedAt: profileByAccount.get(account.id)?.harvestedAt }));
   }
 
   addAccount(input: AccountInput & { id?: string }): Account {
@@ -68,6 +70,10 @@ export class AccountService {
 
   listLotteryRecords(accountId: string): LotteryRecord[] {
     return this.db.listLotteryRecords(accountId);
+  }
+
+  getAccountsOverview(): AccountsOverview {
+    return buildAccountsOverview(this.listAccounts(), this.db.listAllProfiles(), this.db.listAllLotteryRecords());
   }
 
   /** Imports the JSON exported by userscript/eplus-collector.user.js. Matches an existing account

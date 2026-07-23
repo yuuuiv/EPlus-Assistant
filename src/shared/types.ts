@@ -11,6 +11,11 @@ export interface Account {
   lastLoginStatus: AccountStatus;
   createdAt: string;
   updatedAt: string;
+  /** When this account's profile info was last refreshed via a harvest-file import
+   *  (AccountProfile.harvestedAt). Undefined when the account has never been harvested -
+   *  distinct from `updatedAt`, which only tracks the accounts-table row itself and doesn't
+   *  move on a harvest import for an already-existing account. */
+  profileUpdatedAt?: string;
 }
 
 export interface AccountInput {
@@ -148,4 +153,69 @@ export interface DashboardState {
   accounts: Account[];
   logs: AuditLog[];
   dataDir: string;
+}
+
+/** Whether a lottery record's free-text status reads as a win, a loss, or neither (still
+ *  pending, invalidated, etc). Derived from the site's own vocabulary (当選/落選), not stored. */
+export type LotteryOutcome = "won" | "lost" | "pending";
+
+/** One performance (公演), grouped from all lottery records that share the same tour + event
+ *  date/time. A two-day tour's two days are two separate groups since eventDatetime differs;
+ *  the same performance can still carry multiple lottery records (repeat/extra applications). */
+export interface PerformanceHistory {
+  performanceKey: string;
+  tourName: string;
+  eventDatetime?: string;
+  venueName?: string;
+  receptionName?: string;
+  records: LotteryRecord[];
+  lastRecord: LotteryRecord;
+  lastOutcome: LotteryOutcome;
+  wonAtLeastOnce: boolean;
+}
+
+export interface AccountLotteryStats {
+  /** Count of individual lottery records whose status reads as a win - i.e. how many times this
+   *  account has actually won a drawing (a performance drawn for more than once can contribute
+   *  more than one win here). */
+  winCount: number;
+  /** Count of distinct performances this account has ever drawn for. */
+  distinctPerformanceCount: number;
+  /** Count of distinct performances where at least one draw for it was a win. */
+  wonPerformanceCount: number;
+  /** wonPerformanceCount / distinctPerformanceCount, or null when the account has never drawn. */
+  winRate: number | null;
+  performances: PerformanceHistory[];
+}
+
+export interface AccountOverviewEntry {
+  account: Account;
+  gender?: string;
+  stats: AccountLotteryStats;
+}
+
+/** One tour+event-date grouping aggregated across every account, for "which performances got
+ *  drawn for the most" - distinct from PerformanceHistory, which is scoped to one account. */
+export interface TopPerformanceEntry {
+  performanceKey: string;
+  tourName: string;
+  eventDatetime?: string;
+  totalDraws: number;
+  accountCount: number;
+}
+
+export interface AccountsOverview {
+  totalAccounts: number;
+  genderBreakdown: Record<string, number>;
+  totalWinCount: number;
+  totalDistinctPerformances: number;
+  totalWonPerformances: number;
+  overallWinRate: number | null;
+  /** Raw record counts (not deduped by performance) across every account, by outcome. */
+  recordOutcomeBreakdown: Record<LotteryOutcome, number>;
+  /** Most recent lottery records across every account, newest first. */
+  recentActivity: LotteryRecord[];
+  /** Performances drawn for the most, across every account, most-drawn first. */
+  topPerformances: TopPerformanceEntry[];
+  accounts: AccountOverviewEntry[];
 }

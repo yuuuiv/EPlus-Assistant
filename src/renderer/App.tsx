@@ -1,9 +1,11 @@
 import { FolderOpen, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
 import { useState, useEffect } from "react";
-import type { DashboardState, ImportHarvestResult, ImportReport } from "../shared/ipc.js";
+import type { AccountsOverview, DashboardState, ImportHarvestResult, ImportReport } from "../shared/ipc.js";
 import { AccountDetail } from "./components/AccountDetail.js";
 import { AccountManagement, type AccountForm } from "./components/AccountManagement.js";
+import { AccountOverview } from "./components/AccountOverview.js";
 import { LogViewer } from "./components/LogViewer.js";
+import { Modal } from "./components/Modal.js";
 import { Sidebar, type PanelId } from "./components/Sidebar.js";
 import { StatusBanner } from "./components/StatusBanner.js";
 import { ThemeToggle } from "./components/ThemeToggle.js";
@@ -15,6 +17,8 @@ function lines(value: string): string[] { return value.split(/[\n,;]/).map((item
 
 export function App() {
   const [state, setState] = useState<DashboardState>(emptyState);
+  const [overview, setOverview] = useState<AccountsOverview>();
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const [panel, setPanel] = useState<PanelId>("accounts");
   const [message, setMessage] = useState("");
   const [accountForm, setAccountForm] = useState<AccountForm>(defaultAccountForm);
@@ -24,10 +28,13 @@ export function App() {
   const [harvestReport, setHarvestReport] = useState<ImportHarvestResult>();
   const [selectedAccountId, setSelectedAccountId] = useState<string>();
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+  const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId);
 
   async function refresh(): Promise<void> {
-    const snapshot = await window.eplusApi.getState();
+    const [snapshot, nextOverview] = await Promise.all([window.eplusApi.getState(), window.eplusApi.getAccountsOverview()]);
     setState(snapshot);
+    setOverview(nextOverview);
+    setOverviewLoading(false);
   }
   useEffect(() => { void refresh(); }, []);
 
@@ -91,6 +98,9 @@ export function App() {
         onDelete={(id) => runAction(async () => { await window.eplusApi.deleteAccount(id); await refresh(); })}
       />;
       break;
+    case "overview":
+      content = <AccountOverview overview={overview} loading={overviewLoading} />;
+      break;
     case "logs":
       content = <LogViewer logs={state.logs} />;
       break;
@@ -110,8 +120,8 @@ export function App() {
       <main className="workspace" id="main-content">
         <StatusBanner message={message} onDismiss={() => setMessage("")} />
         {content}
-        {selectedAccountId ? <AccountDetail account={state.accounts.find((account) => account.id === selectedAccountId)} onClose={() => setSelectedAccountId(undefined)} onMessage={setMessage} /> : null}
       </main>
+      {selectedAccount ? <Modal title={selectedAccount.label || selectedAccount.eplusEmail} subtitle="账号详情" onClose={() => setSelectedAccountId(undefined)} wide><AccountDetail account={selectedAccount} /></Modal> : null}
     </div>
     <footer className="status-bar">
       <span><UsersRound size={14} />账号 {state.accounts.length}</span>

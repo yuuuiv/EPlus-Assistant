@@ -10,6 +10,7 @@ const api: ElectronApi = {
   revealPassword: (accountId) => ipcRenderer.invoke("account:reveal-password", accountId),
   listProfiles: (accountId) => ipcRenderer.invoke("profile:get", accountId),
   listLotteryRecords: (accountId) => ipcRenderer.invoke("profile:list-lottery-records", accountId),
+  getAccountsOverview: () => ipcRenderer.invoke("stats:get-overview"),
   openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
 };
 

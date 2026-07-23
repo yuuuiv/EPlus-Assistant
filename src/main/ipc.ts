@@ -84,7 +84,9 @@ const importHarvestSchema = z
         companions: z.array(companionSchema),
         lotteryRecords: z.array(lotteryRecordSchema)
       })
-      .strict()
+      // Not .strict(): the userscript's export also carries a `harvestedPages` progress map
+      // (userscript/eplus-collector.user.js) that this app has no use for. Unknown keys are
+      // dropped rather than rejected so that field doesn't fail every single import.
   })
   .strict();
 
@@ -136,6 +138,7 @@ export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore:
   });
   registerHandler("profile:get", window, idSchema, (accountId) => accountService.listProfile(accountId));
   registerHandler("profile:list-lottery-records", window, idSchema, (accountId) => accountService.listLotteryRecords(accountId));
+  registerHandler("stats:get-overview", window, emptySchema, () => accountService.getAccountsOverview());
   registerHandler("app:open-data-folder", window, emptySchema, () => shell.openPath(path.resolve(db.getDataDir())));
 
   window.webContents.once("did-finish-load", () => {
