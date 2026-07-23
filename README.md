@@ -5,7 +5,7 @@
 Eplus Assistant is actually two small tools:
 
 - **A browser userscript** (`userscript/eplus-collector.user.js`) that runs on eplus.jp while you're browsing normally. It reads your phone number, name/gender/address, credit card summary, companion list, and lottery application history off the pages you visit, and exports them to a JSON file.
-- **A local desktop app** (this repository) that imports that JSON file so you can browse the collected data, and manages plain login credentials for your Eplus accounts.
+- **A local desktop app** (this repository) that imports that JSON file so you can browse the collected data across all your Eplus accounts in one place.
 
 Neither piece logs in for you, fills out a lottery entry, or buys anything. You browse and log in to eplus.jp yourself; the userscript only reads what's already on the page in front of you.
 
@@ -33,7 +33,7 @@ A panel now appears in the bottom-right corner of any `eplus.jp`, `member.eplus.
 3. Give each page a second or two. Its dot turns green once the script has read the fields — including "nothing here," which still counts as collected. On the order history page, the script clicks "もっと見る" automatically until every record has loaded, which can take a few seconds if you have a long history.
 4. Click **导出采集文件** (export). Choose which lottery statuses to include, or leave everything checked, then download the JSON file.
 
-You don't need to visit every page, and you don't need to do it in one sitting — the script remembers what it's already collected between page loads, so you can spread this across a few visits and export whenever you're ready.
+You don't need to visit every page, and you don't need to do it in one sitting — the script remembers what it's already collected between page loads, so you can spread this across a few visits and export whenever you're ready. Re-exporting later only adds to or updates what the desktop app already has; a page you skip on a later pass never erases data you collected earlier.
 
 ## Fill in your login details automatically
 
@@ -45,11 +45,11 @@ A **一键填写登录信息** (fill in login details) button appears on eplus.j
 
 The panel's **当前 IP / 来源地** section shows your public IP, country, region, and city, using [ip-api.com](http://ip-api.com) (falling back to [ipwho.is](https://ipwho.is/) if that's unreachable). This is for your own reference only — it isn't written to the exported file.
 
-## Install and run the desktop app
+## Run the desktop app from source
 
-You need Windows 10 or later and Node.js with npm.
+You need Node.js with npm.
 
-```powershell
+```bash
 npm install
 npm run dev
 ```
@@ -58,30 +58,40 @@ This builds the Electron main process, starts Vite, and opens the app. Changes u
 
 For a production build instead:
 
-```powershell
+```bash
 npm run build
 npm start
 ```
 
-## Add accounts
+## Build a standalone installer
 
-Open **账号列表** (accounts) and either:
+```bash
+npm run dist:win    # Windows: NSIS installer + a portable .exe, under release/
+npm run dist:mac    # macOS: .dmg + .zip, under release/ (must run on macOS)
+```
 
-- fill in the **新增账号** (add account) form with an email, password, and label, or
-- paste a CSV or JSON list into **批量导入登录名单** (bulk import):
-
-  ```csv
-  eplusEmail,password,label,tags,enabled
-  user@example.com,secret,Tokyo-01,"tokyo,day1",true
-  ```
-
-Passwords are encrypted with Electron's `safeStorage` before they touch disk.
+electron-builder can't produce a macOS build on Windows (or vice versa) — that's an Apple/electron-builder tooling limit, not something this project works around. If you're not on a Mac, push a `v*` tag (or trigger it manually from the Actions tab) and [`.github/workflows/release.yml`](.github/workflows/release.yml) builds both platforms on GitHub-hosted runners and attaches the installers to a release. Neither build is code-signed, so first launch needs an extra click through Windows SmartScreen or a right-click → Open on macOS.
 
 ## Import a collection file
 
-Click **选择采集文件** (choose collection file) and pick a JSON file the userscript exported. The app matches it to an existing account by email; if none exists, it creates one for you with no real password, since you logged in manually and never gave the userscript one.
+Open **账号列表** (accounts) and click **选择采集文件** (choose collection file) — you can select more than one JSON file at once. The app matches each one to an existing account by email; if none exists, it creates one with no real password, since you logged in manually and never gave the userscript one. You can set a real password afterward from the account's **详情** (details) view so **显示密码** (show password) and the copy button next to it are actually useful.
 
-Open an account's **详情** (details) to see its profile, companions, credit cards, and lottery applications. The applications table has a status filter.
+The account list shows a running number, phone number, email, enabled/disabled status, and when the profile was last refreshed.
+
+## Look at an account's details
+
+Open an account's **详情** (details) to see its profile — name with furigana, phone, address, saved companions, and a credit card summary (network + last 4 digits only; card numbers, CVVs, and expiry are never collected) — plus its full lottery application history with a status filter.
+
+## Check win rates across every account
+
+The **账号总览** (overview) page aggregates every account: total accounts, cumulative wins, distinct performances drawn for, and overall win rate, plus:
+
+- Gender and outcome breakdowns, switchable between a segmented bar and a donut chart
+- A win-rate ranking across accounts
+- Recent lottery activity and the most-contested performances
+- A sortable, filterable table of every account's stats, with a per-account modal listing every performance it's drawn for
+
+Export the whole table to CSV from the button at the top of the page.
 
 ## Repository layout
 
@@ -91,10 +101,14 @@ Open an account's **详情** (details) to see its profile, companions, credit ca
 | `src/main/` | Electron main process: IPC handlers, the accounts/profiles/lottery-records database, encrypted secret storage. |
 | `src/renderer/` | The desktop UI, built with React. |
 | `src/shared/` | Types and the IPC contract shared between main and renderer. |
+| `build/icon.png` | Source app icon; electron-builder generates the `.ico`/`.icns` from it. |
+| `.github/workflows/release.yml` | Builds Windows and macOS installers on a tag push or manual dispatch. |
+
+Account passwords are encrypted with Electron's `safeStorage` before they touch disk. The local database lives under `data/` when running from source, and under the OS's standard per-user app-data directory once installed.
 
 ## Test, typecheck, and build
 
-```powershell
+```bash
 npm run typecheck
 npm test
 npm run build

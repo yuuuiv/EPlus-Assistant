@@ -25,12 +25,12 @@ export function CopyButton(props: CopyButtonProps) {
 
   return <button
     type="button"
-    className="icon-button"
+    className={copied ? "icon-button copy-button copied" : "icon-button copy-button"}
     disabled={props.disabled || !props.value}
     onClick={() => void copy()}
     title={props.label ? `复制${props.label}` : "复制"}
     aria-label={props.label ? `复制${props.label}` : "复制"}
   >
-    {copied ? <Check size={14} /> : <Copy size={14} />}
+    {copied ? <Check key="check" size={14} /> : <Copy key="copy" size={14} />}
   </button>;
 }

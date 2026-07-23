@@ -1,9 +1,9 @@
-import { BarChart3, Download, Flame, History, ImageDown, PercentCircle, PieChart, SquareStack, Ticket, Trophy, Users } from "lucide-react";
+import { BarChart3, Download, Flame, History, ImageDown, PercentCircle, PieChart, Ticket, Trophy, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { AccountOverviewEntry, AccountsOverview, LotteryOutcome, LotteryRecord, PerformanceHistory, TopPerformanceEntry } from "../../shared/ipc.js";
 import { csvCell, downloadSvgAsPng, downloadTextFile, formatDateTime, formatPercent } from "../format.js";
 import { useThemeColors } from "../useThemeColors.js";
-import { BoxPlotChart, DonutChart, RankedBarChart, SegmentBarChart, type BoxPlotSeries, type RankedItem, type Segment } from "./Charts.js";
+import { DonutChart, RankedBarChart, SegmentBarChart, type RankedItem, type Segment } from "./Charts.js";
 import { Modal } from "./Modal.js";
 import { SortableFilterableTable, type Column } from "./SortableFilterableTable.js";
 
@@ -41,7 +41,6 @@ export function AccountOverview(props: AccountOverviewProps) {
   const genderChartRef = useRef<SVGSVGElement>(null);
   const outcomeChartRef = useRef<SVGSVGElement>(null);
   const winRateChartRef = useRef<SVGSVGElement>(null);
-  const performanceBoxPlotRef = useRef<SVGSVGElement>(null);
 
   if (props.loading || !props.overview) {
     return <section className="workspace-panel" aria-labelledby="overview-title">
@@ -80,30 +79,6 @@ export function AccountOverview(props: AccountOverviewProps) {
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 15);
-
-  const accountLabel = (entry: AccountOverviewEntry) => entry.account.label || entry.account.eplusEmail;
-  const performanceBoxPlotSeries: BoxPlotSeries[] = [
-    {
-      key: "winRate",
-      label: "中率（%）",
-      formatValue: (value) => `${Math.round(value)}%`,
-      points: overview.accounts
-        .filter((entry) => entry.stats.winRate !== null)
-        .map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: Math.round((entry.stats.winRate ?? 0) * 100) }))
-    },
-    {
-      key: "distinctPerformances",
-      label: "抽过公演数",
-      formatValue: (value) => `${Math.round(value)} 场`,
-      points: overview.accounts.map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: entry.stats.distinctPerformanceCount }))
-    },
-    {
-      key: "winCount",
-      label: "中选次数",
-      formatValue: (value) => `${Math.round(value)} 次`,
-      points: overview.accounts.map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: entry.stats.winCount }))
-    }
-  ];
 
   function exportOverviewCsv(): void {
     const header = ["账号", "邮箱", "性别", "中选次数", "抽过公演数", "中选公演数", "中率(%)", "资料最后更新"];
@@ -172,12 +147,6 @@ export function AccountOverview(props: AccountOverviewProps) {
       <RankedBarChart ref={winRateChartRef} items={winRateItems} barColor={colors.primary} trackColor={colors.surfaceC} labelColor={colors.textMuted} valueColor={colors.text} maxValue={100} />
     </section>
 
-    <section className="panel-card">
-      <div className="panel-head"><h2><SquareStack size={16} />账号表现分布（箱型图）</h2><button className="icon-button" onClick={() => void exportChart(performanceBoxPlotRef, "账号表现分布")}><ImageDown size={14} />导出图片</button></div>
-      <p className="muted">箱体覆盖中间 50% 的账号（Q1–Q3），线为中位数；圆点为明显偏离整体水平的离群账号。</p>
-      <BoxPlotChart ref={performanceBoxPlotRef} series={performanceBoxPlotSeries} boxColor={colors.primary} outlierColor={colors.danger} trackColor={colors.surfaceSolid} labelColor={colors.textMuted} valueColor={colors.text} />
-    </section>
-
     <div className="panel-layout-two">
       <section className="panel-card">
         <div className="panel-head"><h2><History size={16} />最近抽选动态</h2></div>
@@ -194,9 +163,9 @@ export function AccountOverview(props: AccountOverviewProps) {
       <SortableFilterableTable columns={accountColumns} rows={overview.accounts} rowKey={(entry) => entry.account.id} emptyMessage="尚未添加账号。" />
     </section>
 
-    {modalAccount ? <Modal title={modalAccount.account.label || modalAccount.account.eplusEmail} subtitle="公演抽选记录" onClose={() => setModalAccount(undefined)} wide>
-      <PerformanceModalBody entry={modalAccount} />
-    </Modal> : null}
+    <Modal open={!!modalAccount} title={modalAccount?.account.label || modalAccount?.account.eplusEmail} subtitle="公演抽选记录" onClose={() => setModalAccount(undefined)} wide>
+      {modalAccount ? <PerformanceModalBody entry={modalAccount} /> : null}
+    </Modal>
   </section>;
 }
 

@@ -13,7 +13,7 @@ export class AccountService {
 
   listAccounts(): Account[] {
     const profileByAccount = new Map(this.db.listAllProfiles().map((profile) => [profile.accountId, profile]));
-    return this.db.listAccounts().map((account) => ({ ...account, profileUpdatedAt: profileByAccount.get(account.id)?.harvestedAt }));
+    return this.db.listAccounts().map((account) => ({ ...account, profileUpdatedAt: profileByAccount.get(account.id)?.harvestedAt, phone: profileByAccount.get(account.id)?.phone }));
   }
 
   deleteAccount(id: string): void {

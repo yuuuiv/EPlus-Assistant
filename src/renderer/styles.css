@@ -199,11 +199,39 @@
 .profile-list div { display: grid; gap: var(--space-1); min-width: 0; }
 .profile-list dt { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; }
 .profile-list dd { margin: 0; overflow-wrap: anywhere; }
-.password-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
-.password-row code { min-width: 0; overflow-wrap: anywhere; color: var(--primary); }
+.value-with-copy { display: flex; align-items: center; gap: var(--space-2); }
+.value-with-copy span { min-width: 0; overflow-wrap: anywhere; }
+.name-ruby rt { font-size: 0.62em; font-weight: 400; color: var(--text-muted); -webkit-user-select: none; user-select: none; }
+.address-lines { display: grid; gap: 0.1rem; }
+/* ── Password reveal/edit ────────────────────────────────────────────── */
+.password-panel { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-a); display: grid; gap: 0; }
+.password-panel-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.password-value { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.password-panel-label { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; flex: 0 0 auto; }
+.password-value code { min-width: 0; overflow-wrap: anywhere; color: var(--primary); background: var(--bg-stripe); padding: 0.3rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.92rem; letter-spacing: 0.03em; }
+.password-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.password-actions .icon-button.active { background: var(--primary-dim); color: var(--primary); border-color: transparent; }
+
+/* CSS grid-rows 0fr→1fr trick: animates a smooth height reveal without JS measuring the
+   content, and rides the same spring ease used for other momentum-feel affordances. */
+.password-edit-form { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms var(--spring); }
+.password-edit-form.open { grid-template-rows: 1fr; }
+.password-edit-form > div { overflow: hidden; }
+.password-edit-form-inner { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding-top: var(--space-3); margin-top: var(--space-3); border-top: 1px dashed var(--border); }
+.password-edit-form-inner input { flex: 1 1 12rem; min-width: 0; }
 .companion-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .companion-groups div { min-width: 0; }
 .companion-groups p { margin: var(--space-1) 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.card-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.card-brand-badge { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: var(--radius-pill); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; flex: 0 0 auto; }
+
+/* ── Copy button success pop ─────────────────────────────────────────── */
+.copy-button.copied { color: var(--success); }
+.copy-button svg { animation: copy-pop 280ms var(--spring); }
+@keyframes copy-pop { from { transform: scale(0.5); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .copy-button svg { animation: none; }
+}
 .filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
 .network-identity { margin-top: var(--space-4); padding: var(--space-3); border-left: 3px solid var(--info); background: var(--bg-stripe); }
 .privacy-note { color: var(--text-muted); font-size: 0.82rem; }
@@ -900,41 +928,78 @@ tbody tr:last-child td { border-bottom: none; }
 .performance-list { margin: 0; }
 .performance-list table { background: var(--surface-d); }
 
-/* ── Modal (floating dialog for account/performance detail) ────────────── */
-.modal-overlay {
+/* ── Modal (iOS-style bottom sheet via vaul: drag the handle or the sheet itself down to
+   dismiss; vaul/style.css supplies the slide/drag transform and spring-back physics, this
+   just themes it) ─────────────────────────────────────────────────────────────────────── */
+.drawer-overlay {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  display: grid;
-  place-items: center;
-  padding: var(--space-6);
   background: rgba(6, 8, 14, 0.55);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
-  animation: modal-overlay-in 160ms var(--ease-out) both;
 }
-.modal-dialog {
+.drawer-content {
+  position: fixed;
+  z-index: 1201;
+  inset-inline: 0;
+  bottom: 0;
+  margin-inline: auto;
   width: min(50rem, 100%);
-  max-block-size: min(88vh, 62rem);
-  overflow: auto;
+  min-block-size: min(60vh, 100%);
+  max-block-size: 88vh;
+  display: flex;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-surface-solid);
+  box-shadow: var(--shadow-lg);
+  outline: none;
+  overflow: hidden;
+}
+.drawer-content-wide { width: min(74rem, 100%); }
+/* The actual scroll container: kept off the Content element itself, which vaul gives
+   will-change:transform for the drag animation (see Modal.tsx for why that combination
+   with overflow:auto breaks repaint on scroll). flex (not a percentage height, which has
+   nothing concrete to resolve against on an auto-height flex parent) is what lets this child
+   actually constrain itself and scroll instead of just growing to fit its content. */
+.drawer-scroll-area {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface-solid);
-  box-shadow: var(--shadow-lg);
-  animation: modal-in 180ms var(--ease-out) both;
-  outline: none;
+  padding-bottom: max(var(--space-5), env(safe-area-inset-bottom));
 }
-.modal-dialog-wide { width: min(74rem, 100%); }
-.modal-head { margin-bottom: 0; }
+.drawer-handle-wrap { display: flex; justify-content: center; margin-top: calc(var(--space-2) * -1); margin-bottom: var(--space-1); flex: 0 0 auto; }
+/* The one bold moment in an otherwise quiet sheet - a wash bleeding into the rounded top
+   corners, echoing the topbar's own gradient treatment so it reads as the same product
+   rather than a new decorative motif. */
+.modal-head {
+  margin: calc(var(--space-2) * -1) calc(var(--space-5) * -1) 0;
+  padding: var(--space-4) var(--space-5) var(--space-4);
+  background:
+    radial-gradient(60% 160% at 0% 0%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 70%),
+    radial-gradient(45% 160% at 100% 0%, var(--mint-wash), transparent 70%);
+}
+.account-title { display: flex; align-items: center; gap: var(--space-3); }
+.account-avatar {
+  display: grid;
+  place-items: center;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  border-radius: var(--radius);
+  font-weight: 700;
+  font-size: 1.05rem;
+  flex: 0 0 auto;
+}
+[data-vaul-handle] { background: var(--border-input); }
+.modal-title { margin: 0; font-size: 1.15rem; font-weight: 700; }
 .modal-body { min-block-size: 0; display: grid; gap: var(--space-4); }
-@keyframes modal-overlay-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes modal-in { from { opacity: 0; transform: scale(0.97) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
-  .modal-overlay, .modal-dialog { animation: none; }
+  [data-vaul-drawer] { transition: none !important; animation: none !important; }
 }
 
 /* ── Stat hero tiles (account overview headline numbers) ────────────────── */

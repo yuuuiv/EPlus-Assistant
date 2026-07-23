@@ -1,6 +1,7 @@
 import React, { Component, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App.js";
+import "./vendor/vaul.css";
 import "./styles.css";
 import { applyTheme, getPreferredTheme } from "./theme.js";
 

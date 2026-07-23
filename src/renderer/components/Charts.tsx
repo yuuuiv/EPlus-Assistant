@@ -184,7 +184,11 @@ function truncateLabel(label: string): string {
 /** Magnitude comparison across accounts/performances - single sequential hue, sorted by the
  *  caller, direct-labeled (no legend needed for one series per the dataviz method). */
 export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((props, ref) => {
-  const width = 640;
+  // Wider viewBox than the other charts: this one renders in a full-width panel (not the
+  // two-column layout the segment/donut charts share), so at 640 the browser scales it up ~1.7x
+  // to fill that width - inflating the SVG's fixed font sizes well past the surrounding text.
+  // Matching the viewBox to roughly its real rendered width keeps the scale factor near 1:1.
+  const width = 1040;
   const rowHeight = 30;
   const rowGap = 8;
   const labelWidth = 170;
@@ -214,127 +218,3 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
   </svg>;
 });
 RankedBarChart.displayName = "RankedBarChart";
-
-export interface BoxPlotPoint {
-  readonly key: string;
-  readonly label: string;
-  readonly value: number;
-}
-
-export interface BoxPlotSeries {
-  readonly key: string;
-  readonly label: string;
-  readonly points: readonly BoxPlotPoint[];
-  readonly formatValue?: (value: number) => string;
-}
-
-interface BoxPlotStats {
-  readonly min: number;
-  readonly q1: number;
-  readonly median: number;
-  readonly q3: number;
-  readonly max: number;
-  readonly lowerWhisker: number;
-  readonly upperWhisker: number;
-  readonly outliers: readonly BoxPlotPoint[];
-}
-
-function medianOf(values: readonly number[]): number {
-  if (values.length === 0) return 0;
-  const mid = Math.floor(values.length / 2);
-  return values.length % 2 === 0 ? (values[mid - 1]! + values[mid]!) / 2 : values[mid]!;
-}
-
-/** Tukey hinges: split the sorted set at the median (excluding it on an odd count) and take the
- *  median of each half as Q1/Q3, then flag anything past 1.5·IQR from the box as an outlier -
- *  the standard box-and-whisker convention so results read the same as any stats tool. */
-function computeBoxPlotStats(points: readonly BoxPlotPoint[]): BoxPlotStats {
-  const sorted = [...points].sort((a, b) => a.value - b.value);
-  const values = sorted.map((point) => point.value);
-  const n = values.length;
-  const lowerHalf = n % 2 === 0 ? values.slice(0, n / 2) : values.slice(0, (n - 1) / 2);
-  const upperHalf = n % 2 === 0 ? values.slice(n / 2) : values.slice((n + 1) / 2);
-  const q1 = medianOf(lowerHalf.length > 0 ? lowerHalf : values);
-  const q3 = medianOf(upperHalf.length > 0 ? upperHalf : values);
-  const iqr = q3 - q1;
-  const lowerFence = q1 - 1.5 * iqr;
-  const upperFence = q3 + 1.5 * iqr;
-  const withinLower = values.filter((value) => value >= lowerFence);
-  const withinUpper = values.filter((value) => value <= upperFence);
-  return {
-    min: values[0]!,
-    q1,
-    median: medianOf(values),
-    q3,
-    max: values[n - 1]!,
-    lowerWhisker: withinLower.length > 0 ? Math.min(...withinLower) : values[0]!,
-    upperWhisker: withinUpper.length > 0 ? Math.max(...withinUpper) : values[n - 1]!,
-    outliers: sorted.filter((point) => point.value < lowerFence || point.value > upperFence)
-  };
-}
-
-interface BoxPlotChartProps {
-  readonly series: readonly BoxPlotSeries[];
-  readonly boxColor: string;
-  readonly outlierColor: string;
-  readonly trackColor: string;
-  readonly labelColor: string;
-  readonly valueColor: string;
-}
-
-/** One small-multiple row per metric rather than a single shared axis: 中率/抽过公演数/中选次数
- *  live on incompatible scales (a percentage next to a raw count), and a box plot's whole point -
- *  reading the spread - breaks the moment two series fight over one axis. Each row gets its own
- *  domain so the box, whiskers and outlier dots stay legible regardless of the other rows' scale. */
-export const BoxPlotChart = forwardRef<SVGSVGElement, BoxPlotChartProps>((props, ref) => {
-  const width = 640;
-  const rowHeight = 56;
-  const labelWidth = 130;
-  const valueWidth = 150;
-  const trackWidth = width - labelWidth - valueWidth;
-  const boxThickness = 20;
-  const height = props.series.length > 0 ? props.series.length * rowHeight : rowHeight;
-
-  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="箱型图">
-    {props.series.length === 0
-      ? <text x={0} y={rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
-      : props.series.map((series, index) => {
-        const y = index * rowHeight;
-        const rowCenter = y + rowHeight / 2;
-        const format = series.formatValue ?? ((value: number) => value.toFixed(1));
-        if (series.points.length === 0) {
-          return <g key={series.key}>
-            <text x={0} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>{series.label}</text>
-            <text x={labelWidth} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>暂无数据</text>
-          </g>;
-        }
-
-        const stats = computeBoxPlotStats(series.points);
-        const domainMin = Math.min(stats.min, ...stats.outliers.map((point) => point.value));
-        const domainMax = Math.max(stats.max, ...stats.outliers.map((point) => point.value));
-        const span = domainMax - domainMin || 1;
-        const scale = (value: number) => labelWidth + ((value - domainMin) / span) * trackWidth;
-
-        return <g key={series.key}>
-          <text x={0} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>
-            <title>{series.label}</title>
-            {truncateLabel(series.label)}
-          </text>
-          <line x1={scale(stats.lowerWhisker)} x2={scale(stats.upperWhisker)} y1={rowCenter} y2={rowCenter} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
-          <line x1={scale(stats.lowerWhisker)} x2={scale(stats.lowerWhisker)} y1={rowCenter - boxThickness / 3} y2={rowCenter + boxThickness / 3} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
-          <line x1={scale(stats.upperWhisker)} x2={scale(stats.upperWhisker)} y1={rowCenter - boxThickness / 3} y2={rowCenter + boxThickness / 3} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
-          <rect x={Math.min(scale(stats.q1), scale(stats.q3))} y={rowCenter - boxThickness / 2} width={Math.max(Math.abs(scale(stats.q3) - scale(stats.q1)), 2)} height={boxThickness} rx={4} fill={props.boxColor}>
-            <title>{`${series.label}：Q1 ${format(stats.q1)} · 中位数 ${format(stats.median)} · Q3 ${format(stats.q3)}`}</title>
-          </rect>
-          <line x1={scale(stats.median)} x2={scale(stats.median)} y1={rowCenter - boxThickness / 2} y2={rowCenter + boxThickness / 2} stroke={props.trackColor} strokeWidth={2} />
-          {stats.outliers.map((point) => <circle key={point.key} cx={scale(point.value)} cy={rowCenter} r={4} fill={props.outlierColor} stroke={props.trackColor} strokeWidth={2}>
-            <title>{`${point.label}：${format(point.value)}（离群值）`}</title>
-          </circle>)}
-          <text x={labelWidth + trackWidth + 10} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>
-            中位数 {format(stats.median)}
-          </text>
-        </g>;
-      })}
-  </svg>;
-});
-BoxPlotChart.displayName = "BoxPlotChart";

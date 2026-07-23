@@ -16,6 +16,9 @@ export interface Account {
    *  distinct from `updatedAt`, which only tracks the accounts-table row itself and doesn't
    *  move on a harvest import for an already-existing account. */
   profileUpdatedAt?: string;
+  /** From the harvested profile, if any - shown in the account list since a harvest-created
+   *  account's `label` is just its email (there's no manual-entry UI to customize it anymore). */
+  phone?: string;
 }
 
 export interface AccountInput {

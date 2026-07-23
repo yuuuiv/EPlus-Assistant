@@ -30,14 +30,16 @@
     "lucide-react": "^0.546.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "sonner": "^2.0.7",
     "typescript": "^5.9.3",
+    "vaul": "^1.1.2",
     "vite": "^7.1.9",
     "vitest": "^3.2.4",
     "wait-on": "^9.0.1"
   },
   "build": {
     "appId": "dev.eplus-assistant.desktop",
-    "productName": "Eplus 账号管理器",
+    "productName": "EPlus Assistant",
     "asar": true,
     "publish": null,
     "files": [
@@ -52,12 +54,18 @@
       "output": "release"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.utilities",
       "identity": null
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "oneClick": false,

@@ -1,3 +1,10 @@
+/** The eplus.jp page stores some fields (credit card brand names like "ＶＩＳＡ"/"Ｍａｓｔｅｒ")
+ *  in fullwidth Unicode forms; the collector copies them verbatim, but they read as oddly
+ *  spaced-out in a Latin UI, so normalize to regular ASCII for display. */
+export function toHalfWidth(value: string): string {
+  return value.replace(/[！-～]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xFEE0));
+}
+
 export function formatDateTime(iso: string | undefined): string {
   if (!iso) return "-";
   const date = new Date(iso);
