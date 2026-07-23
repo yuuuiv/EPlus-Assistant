@@ -2,10 +2,10 @@
 
 <p align="center"><b><a href="README.md">English</a> | <a href="README_zh.md">简体中文</a></b></p>
 
-Eplus Assistant 是两个小工具，不是一条自动化流水线：
+Eplus Assistant 由两个小工具组成：
 
 - **浏览器用户脚本**（`userscript/eplus-collector.user.js`）：在你正常浏览 eplus.jp 时运行，把手机号、姓名/性别/住址、信用卡摘要、同行者名单、抽选申请记录从当前页面读出来，导出成一个 JSON 文件。
-- **本地桌面应用**（也就是这个仓库）：导入那个 JSON 文件供你查看，同时管理你各个 Eplus 账号的登录邮箱和密码。
+- **本地桌面应用**：导入那个 JSON 文件供你查看，同时管理你各个 Eplus 账号的登录邮箱和密码。
 
 这两个工具都不会替你登录、替你填抽选表单，也不会替你下单。你自己在浏览器里正常浏览、登录 eplus.jp，用户脚本只读取你正在看的这个页面上已经有的信息。
 

@@ -2,7 +2,7 @@
 
 <p align="center"><b><a href="README.md">English</a> | <a href="README_zh.md">简体中文</a></b></p>
 
-Eplus Assistant is two small tools, not one automated pipeline:
+Eplus Assistant is actually two small tools:
 
 - **A browser userscript** (`userscript/eplus-collector.user.js`) that runs on eplus.jp while you're browsing normally. It reads your phone number, name/gender/address, credit card summary, companion list, and lottery application history off the pages you visit, and exports them to a JSON file.
 - **A local desktop app** (this repository) that imports that JSON file so you can browse the collected data, and manages plain login credentials for your Eplus accounts.
