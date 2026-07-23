@@ -12,7 +12,7 @@ const webContents = {
 const browserWindowOptions: Array<Record<string, unknown>> = [];
 
 vi.mock("electron", () => ({
-  app: { whenReady: () => new Promise<void>(() => undefined), on: vi.fn(), isPackaged: true, quit: vi.fn() },
+  app: { whenReady: () => new Promise<void>(() => undefined), on: vi.fn(), isPackaged: true, quit: vi.fn(), getAppPath: () => process.cwd(), getPath: () => process.cwd() },
   BrowserWindow: Object.assign(function MockBrowserWindow(options: Record<string, unknown>) {
     browserWindowOptions.push(options);
     return { webContents, loadURL: vi.fn(), loadFile: vi.fn() };

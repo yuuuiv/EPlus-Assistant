@@ -7,22 +7,6 @@ import { AccountService } from "./services/accountService.js";
 
 const idSchema = z.string().trim().min(1).max(128);
 const emptySchema = z.undefined();
-const recordSchema = z.record(z.string(), z.unknown());
-
-const addAccountSchema = z
-  .object({
-    id: idSchema.optional(),
-    label: z.string().optional(),
-    eplusEmail: z.string().email(),
-    password: z.string().min(1),
-    mailProviderId: z.string().optional(),
-    mailConfig: recordSchema.optional(),
-    tags: z.array(z.string()).optional(),
-    enabled: z.boolean().optional()
-  })
-  .strict();
-
-const importAccountsSchema = z.object({ kind: z.enum(["csv", "json"]), text: z.string().min(1) }).strict();
 
 const creditCardSchema = z
   .object({
@@ -62,6 +46,8 @@ const lotteryRecordSchema = z
     detailUrl: z.string().optional()
   })
   .strict();
+
+const setPasswordSchema = z.object({ accountId: idSchema, password: z.string().min(1) }).strict();
 
 const importHarvestSchema = z
   .object({
@@ -123,10 +109,9 @@ export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore:
     logs: db.listLogs(),
     dataDir: db.getDataDir()
   }));
-  registerHandler("account:add", window, addAccountSchema, (input) => accountService.addAccount(input));
-  registerHandler("account:import", window, importAccountsSchema, (input) => accountService.importAccounts(input.kind, input.text));
   registerHandler("account:import-harvest", window, importHarvestSchema, (input) => accountService.importHarvest(input.payload));
   registerHandler("account:delete", window, idSchema, (id) => accountService.deleteAccount(id));
+  registerHandler("account:set-password", window, setPasswordSchema, (input) => accountService.setPassword(input.accountId, input.password));
   ipcMain.handle("account:reveal-password", async (event, payload: unknown) => {
     validateSender(event, window);
     try {

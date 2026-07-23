@@ -1,6 +1,7 @@
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Account, AccountProfile, LotteryRecord } from "../../shared/ipc.js";
+import { CopyButton } from "./CopyButton.js";
 import { formatDateTime } from "../format.js";
 
 interface AccountDetailProps {
@@ -18,9 +19,14 @@ export function AccountDetail(props: AccountDetailProps) {
   const [password, setPassword] = useState<string>();
   const [recordQuery, setRecordQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [editingPassword, setEditingPassword] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
 
   useEffect(() => {
     const account = props.account;
+    setEditingPassword(false);
+    setPasswordInput("");
     if (!account) return;
     const accountId = account.id;
     let active = true;
@@ -52,6 +58,7 @@ export function AccountDetail(props: AccountDetailProps) {
   );
 
   if (!props.account) return null;
+  const email = profile?.eplusEmail || props.account.eplusEmail;
 
   async function showPassword(): Promise<void> {
     const accountId = props.account?.id;
@@ -60,10 +67,45 @@ export function AccountDetail(props: AccountDetailProps) {
     setPassword(revealed.plaintext);
   }
 
+  async function savePassword(): Promise<void> {
+    const accountId = props.account?.id;
+    if (!accountId || !passwordInput) return;
+    setSavingPassword(true);
+    try {
+      await window.eplusApi.setAccountPassword({ accountId, password: passwordInput });
+      setEditingPassword(false);
+      setPasswordInput("");
+    } finally {
+      setSavingPassword(false);
+    }
+  }
+
   return (
     <div className="account-detail">
       <div className="detail-grid">
-        <article className="detail-block"><h3>个人资料</h3><dl className="profile-list"><div><dt>姓名</dt><dd>{profile?.name || "暂无资料"}{profile?.nameKana ? ` （${profile.nameKana}）` : ""}</dd></div><div><dt>邮箱</dt><dd>{profile?.eplusEmail || props.account.eplusEmail}</dd></div><div><dt>电话</dt><dd>{maskPhone(profile?.phone)}</dd></div><div><dt>性别</dt><dd>{profile?.gender || "暂无资料"}</dd></div><div><dt>出生年份</dt><dd>{profile?.birthYear || "暂无资料"}</dd></div><div><dt>地址</dt><dd>{profile?.address || "暂无资料"}</dd></div>{profile?.harvestedAt ? <div><dt>资料最后更新</dt><dd>{formatDateTime(profile.harvestedAt)}</dd></div> : null}</dl><div className="password-row"><code>{password || "••••••••••••"}</code><button type="button" className="icon-button" onClick={() => { void showPassword(); }}>{password ? <><EyeOff size={15} />将在 5 秒后隐藏</> : <><Eye size={15} />显示密码</>}</button></div></article>
+        <article className="detail-block">
+          <h3>个人资料</h3>
+          <dl className="profile-list">
+            <div><dt>姓名</dt><dd>{profile?.name || "暂无资料"}{profile?.nameKana ? ` （${profile.nameKana}）` : ""}</dd></div>
+            <div><dt>邮箱</dt><dd>{email}<CopyButton value={email} label="邮箱" /></dd></div>
+            <div><dt>电话</dt><dd>{maskPhone(profile?.phone)}<CopyButton value={profile?.phone ?? ""} label="电话" disabled={!profile?.phone} /></dd></div>
+            <div><dt>性别</dt><dd>{profile?.gender || "暂无资料"}</dd></div>
+            <div><dt>出生年份</dt><dd>{profile?.birthYear || "暂无资料"}</dd></div>
+            <div><dt>地址</dt><dd>{profile?.address || "暂无资料"}</dd></div>
+            {profile?.harvestedAt ? <div><dt>资料最后更新</dt><dd>{formatDateTime(profile.harvestedAt)}</dd></div> : null}
+          </dl>
+          <div className="password-row">
+            <code>{password || "••••••••••••"}</code>
+            <CopyButton value={password ?? ""} label="密码" disabled={!password} />
+            <button type="button" className="icon-button" onClick={() => { void showPassword(); }}>{password ? <><EyeOff size={15} />将在 5 秒后隐藏</> : <><Eye size={15} />显示密码</>}</button>
+            <button type="button" className="icon-button" onClick={() => { setEditingPassword((current) => !current); setPasswordInput(""); }}><KeyRound size={15} />编辑密码</button>
+          </div>
+          {editingPassword ? <div className="password-row">
+            <input type="password" value={passwordInput} placeholder="输入真实登录密码" onChange={(event) => setPasswordInput(event.target.value)} />
+            <button type="button" className="primary" disabled={savingPassword || !passwordInput} onClick={() => { void savePassword(); }}>{savingPassword ? "正在保存" : "保存"}</button>
+            <button type="button" className="icon-button" onClick={() => { setEditingPassword(false); setPasswordInput(""); }}>取消</button>
+          </div> : null}
+        </article>
         <article className="detail-block"><h3>同行者</h3><div className="companion-groups"><div><strong>当前同行者</strong>{(profile?.companions ?? []).length > 0 ? (profile?.companions ?? []).map((companion) => <p key={`${companion.companionId ?? companion.name}`}>{companion.name}{companion.maskedEmail ? ` · ${companion.maskedEmail}` : ""}{companion.approvedAt ? ` · ${companion.approvedAt}` : ""}</p>) : <p className="muted">暂无当前同行者。</p>}</div></div><div className="card-summary"><strong>已绑定信用卡</strong>{(profile?.creditCards ?? []).length > 0 ? (profile?.creditCards ?? []).map((card) => <p key={`${card.creditCardId ?? `${card.brand}-${card.last4}`}`}>{card.brand || "Card"} ···· {card.last4}{card.expireMonth && card.expireYear ? ` · 有效期 ${card.expireMonth}/${card.expireYear}` : ""}</p>) : <p className="muted">暂无可用卡片摘要。卡号、CVV 和有效期不会保存。</p>}</div></article>
       </div>
       <article className="detail-block"><div className="panel-head"><h3>抽选记录</h3></div><div className="filter-grid"><label>演出搜索<input value={recordQuery} onChange={(event) => setRecordQuery(event.target.value)} /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">全部状态</option>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></div><RecordTable records={filteredRecords} /></article>

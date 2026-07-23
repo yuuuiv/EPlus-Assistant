@@ -1,8 +1,8 @@
 import { FolderOpen, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
 import { useState, useEffect } from "react";
-import type { AccountsOverview, DashboardState, ImportHarvestResult, ImportReport } from "../shared/ipc.js";
+import type { AccountsOverview, DashboardState, ImportHarvestResult } from "../shared/ipc.js";
 import { AccountDetail } from "./components/AccountDetail.js";
-import { AccountManagement, type AccountForm } from "./components/AccountManagement.js";
+import { AccountManagement } from "./components/AccountManagement.js";
 import { AccountOverview } from "./components/AccountOverview.js";
 import { LogViewer } from "./components/LogViewer.js";
 import { Modal } from "./components/Modal.js";
@@ -11,9 +11,6 @@ import { StatusBanner } from "./components/StatusBanner.js";
 import { ThemeToggle } from "./components/ThemeToggle.js";
 
 const emptyState: DashboardState = { accounts: [], logs: [], dataDir: "" };
-const defaultAccountForm: AccountForm = { label: "", eplusEmail: "", password: "", mailProviderId: "manual", tags: "", enabled: true, mailConfig: "{}" };
-
-function lines(value: string): string[] { return value.split(/[\n,;]/).map((item) => item.trim()).filter(Boolean); }
 
 export function App() {
   const [state, setState] = useState<DashboardState>(emptyState);
@@ -21,10 +18,6 @@ export function App() {
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [panel, setPanel] = useState<PanelId>("accounts");
   const [message, setMessage] = useState("");
-  const [accountForm, setAccountForm] = useState<AccountForm>(defaultAccountForm);
-  const [importKind, setImportKind] = useState<"csv" | "json">("csv");
-  const [importText, setImportText] = useState("eplusEmail,password,label,tags,enabled\n");
-  const [report, setReport] = useState<ImportReport>();
   const [harvestReport, setHarvestReport] = useState<ImportHarvestResult>();
   const [selectedAccountId, setSelectedAccountId] = useState<string>();
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
@@ -37,6 +30,15 @@ export function App() {
     setOverviewLoading(false);
   }
   useEffect(() => { void refresh(); }, []);
+
+  /** The header's manual refresh re-reads the on-disk state, so any one-off banner from a
+   *  previous action (a harvest-import result, an error message) is stale by definition once
+   *  a fresh read has happened - clear it here rather than leaving it displayed forever. */
+  async function manualRefresh(): Promise<void> {
+    setHarvestReport(undefined);
+    setMessage("");
+    await refresh();
+  }
 
   async function runAction(action: () => Promise<void>): Promise<void> {
     try {
@@ -54,18 +56,6 @@ export function App() {
     };
   }
 
-  const addAccount = withPending("addAccount", async () => {
-    const created = await window.eplusApi.addAccount({ ...accountForm, tags: lines(accountForm.tags), mailConfig: JSON.parse(accountForm.mailConfig || "{}") });
-    setAccountForm(defaultAccountForm);
-    setMessage(`已添加账号：${created.eplusEmail}`);
-    await refresh();
-  });
-  const importAccounts = withPending("importAccounts", async () => {
-    const result = await window.eplusApi.importAccounts({ kind: importKind, text: importText });
-    setReport(result);
-    setMessage(`导入完成：新增 ${result.inserted}，更新 ${result.updated}`);
-    await refresh();
-  });
   const importHarvestText = withPending<[string]>("importHarvest", async (text) => {
     const payload = JSON.parse(text);
     const result = await window.eplusApi.importHarvest({ payload });
@@ -80,19 +70,8 @@ export function App() {
     case "accounts":
       content = <AccountManagement
         accounts={state.accounts}
-        form={accountForm}
-        importKind={importKind}
-        importText={importText}
-        report={report}
         harvestReport={harvestReport}
-        adding={pending.has("addAccount")}
-        importing={pending.has("importAccounts")}
         importingHarvest={pending.has("importHarvest")}
-        onFormChange={setAccountForm}
-        onImportKindChange={setImportKind}
-        onImportTextChange={setImportText}
-        onAdd={addAccount}
-        onImport={importAccounts}
         onImportHarvestText={importHarvestText}
         onSelect={setSelectedAccountId}
         onDelete={(id) => runAction(async () => { await window.eplusApi.deleteAccount(id); await refresh(); })}
@@ -111,7 +90,7 @@ export function App() {
       <div><p className="eyebrow">Eplus 账号管理器</p><h1>本地账号管理器</h1></div>
       <div className="topbar-actions">
         <ThemeToggle />
-        <button className="icon-button" onClick={() => { void refresh(); }} title="重新读取本地数据"><RefreshCw size={16} />刷新</button>
+        <button className="icon-button" onClick={() => { void manualRefresh(); }} title="重新读取本地数据"><RefreshCw size={16} />刷新</button>
         <button className="icon-button" onClick={() => { void window.eplusApi.openDataFolder(); }} title="打开本地数据目录"><FolderOpen size={16} />数据目录</button>
       </div>
     </header>

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Account, AccountInput, AccountProfile, AccountsOverview, HarvestImportPayload, ImportHarvestResult, ImportReport, LotteryRecord, PasswordRevealResponse } from "../../shared/types.js";
+import type { Account, AccountProfile, AccountsOverview, HarvestImportPayload, ImportHarvestResult, LotteryRecord, PasswordRevealResponse } from "../../shared/types.js";
 import { SecretStore } from "../storage/secretStore.js";
 import type { AppDatabase } from "../storage/database.js";
-import { normalizeHarvestImport, parseAccountImport } from "./importService.js";
+import { normalizeHarvestImport } from "./importService.js";
 import { buildAccountsOverview } from "./statsService.js";
 
 export class AccountService {
@@ -16,43 +16,17 @@ export class AccountService {
     return this.db.listAccounts().map((account) => ({ ...account, profileUpdatedAt: profileByAccount.get(account.id)?.harvestedAt }));
   }
 
-  addAccount(input: AccountInput & { id?: string }): Account {
-    return this.db.upsertAccount({
-      ...input,
-      encryptedPassword: this.secretStore.encryptString(input.password),
-      encryptedMailConfig: this.secretStore.encryptJson(input.mailConfig ?? {})
-    });
-  }
-
-  importAccounts(kind: "csv" | "json", text: string): ImportReport {
-    const rows = parseAccountImport(kind, text);
-    const report: ImportReport = { inserted: 0, updated: 0, skipped: 0, errors: [] };
-    rows.forEach((row, index) => {
-      try {
-        const existing = this.db.findAccountByEmail(row.eplusEmail);
-        this.db.upsertAccount({
-          id: existing?.id ?? randomUUID(),
-          ...row,
-          encryptedPassword: this.secretStore.encryptString(row.password),
-          encryptedMailConfig: this.secretStore.encryptJson(row.mailConfig ?? {})
-        });
-        if (existing) {
-          report.updated += 1;
-        } else {
-          report.inserted += 1;
-        }
-      } catch (error) {
-        report.errors.push({
-          row: index + 1,
-          message: error instanceof Error ? error.message : "Unknown import error"
-        });
-      }
-    });
-    return report;
-  }
-
   deleteAccount(id: string): void {
     this.db.deleteAccount(id);
+  }
+
+  /** Harvest-created accounts start with an empty password (the browser userscript can't read
+   *  it) - this lets the user record the real login password by hand afterward, so reveal/copy
+   *  is actually useful when they need to log in manually. */
+  setPassword(id: string, password: string): void {
+    const account = this.db.getStoredAccount(id);
+    if (!account) throw new Error("Account not found.");
+    this.db.updateAccountPassword(id, this.secretStore.encryptString(password));
   }
 
   revealPassword(id: string, senderWindowId: string): PasswordRevealResponse {
@@ -104,8 +78,11 @@ export class AccountService {
       gender: harvest.profile.gender,
       birthYear: harvest.profile.birthYear,
       address: harvest.profile.address,
-      creditCards: harvest.creditCards,
-      companions: harvest.companions,
+      // A collection run doesn't necessarily re-visit every page (see upsertLotteryRecords'
+      // comment) - an empty list here means "this run didn't touch this section," not "the
+      // account genuinely has none," so it must not clobber what a previous run already found.
+      creditCards: harvest.creditCards.length > 0 ? harvest.creditCards : (previousProfile?.creditCards ?? []),
+      companions: harvest.companions.length > 0 ? harvest.companions : (previousProfile?.companions ?? []),
       pastCompanions: previousProfile?.pastCompanions ?? [],
       harvestedAt: harvest.collectedAt,
       harvestStatus: "Ok"

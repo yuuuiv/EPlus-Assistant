@@ -13,6 +13,15 @@ let ipcRegistered = false;
 
 export const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'";
 
+/** In dev, cwd is the project root (matches how `npm run dev`/`npm start` launch electron), so
+ *  a project-local `data/` folder is the natural place. In a packaged app that folder would be
+ *  read-only (inside Program Files / the .app bundle) and isn't writable, so the OS-standard
+ *  per-user app-data directory is used instead - this also guarantees a fresh install never
+ *  inherits a developer's local database. */
+function getDataDir(): string {
+  return app.isPackaged ? app.getPath("userData") : path.join(process.cwd(), "data");
+}
+
 export function isTrustedNavigation(url: string): boolean {
   try {
     const target = new URL(url);
@@ -36,7 +45,7 @@ export function sanitizeRuntimeDetail(value: string): string {
 
 function writeRuntimeLog(message: string): void {
   try {
-    const dataDir = path.join(process.cwd(), "data");
+    const dataDir = getDataDir();
     if (!existsSync(dataDir)) {
       mkdirSync(dataDir, { recursive: true });
     }
@@ -59,7 +68,11 @@ function errorHtml(title: string, detail: string): string {
           if (char === ">") return "&gt;";
           return "&amp;";
         })}</pre>
-        <p style="color:#8892a4;">详细日志：data/runtime.log</p>
+        <p style="color:#8892a4;">详细日志：${path.join(getDataDir(), "runtime.log").replace(/[<>&]/g, (char) => {
+          if (char === "<") return "&lt;";
+          if (char === ">") return "&gt;";
+          return "&amp;";
+        })}</p>
       </main>
     </body>
   </html>`;
@@ -73,7 +86,7 @@ export function createWindow(): ElectronBrowserWindow {
     minHeight: 780,
     backgroundColor: "#f3efe7",
     webPreferences: {
-      preload: path.join(process.cwd(), "dist-electron", "main", "preload.js"),
+      preload: path.join(app.getAppPath(), "dist-electron", "main", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -116,7 +129,7 @@ async function loadRenderer(window: ElectronBrowserWindow): Promise<void> {
     window.webContents.openDevTools({ mode: "detach" });
     return;
   }
-  await window.loadFile(path.join(process.cwd(), "dist", "index.html"));
+  await window.loadFile(path.join(app.getAppPath(), "dist", "index.html"));
 }
 
 async function getServices(): Promise<{ db: AppDatabase; secretStore: SecretStore }> {
@@ -124,7 +137,7 @@ async function getServices(): Promise<{ db: AppDatabase; secretStore: SecretStor
     return servicesPromise;
   }
   servicesPromise = (async () => {
-    const dataDir = path.join(process.cwd(), "data");
+    const dataDir = getDataDir();
     if (!existsSync(dataDir)) {
       mkdirSync(dataDir, { recursive: true });
     }

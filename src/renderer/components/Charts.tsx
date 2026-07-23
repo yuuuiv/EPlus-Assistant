@@ -58,6 +58,109 @@ export const SegmentBarChart = forwardRef<SVGSVGElement, SegmentBarChartProps>((
 });
 SegmentBarChart.displayName = "SegmentBarChart";
 
+interface SegmentLegendProps {
+  readonly segments: readonly Segment[];
+  readonly total: number;
+  readonly textColor: string;
+  readonly mutedColor: string;
+  readonly y: number;
+}
+
+function SegmentLegend(props: SegmentLegendProps) {
+  const rowHeight = 24;
+  return <g transform={`translate(0, ${props.y})`}>
+    {props.segments.map((segment, index) => {
+      const percent = props.total > 0 ? Math.round((segment.value / props.total) * 100) : 0;
+      return <g key={segment.key} transform={`translate(0, ${index * rowHeight})`}>
+        <rect x={0} y={4} width={13} height={13} rx={3} fill={segment.color} />
+        <text x={21} y={14} fontFamily={FONT} fontSize={13} fill={props.textColor}>{segment.label} · {segment.value}（{percent}%）</text>
+      </g>;
+    })}
+    {props.segments.length === 0 ? <text x={0} y={14} fontFamily={FONT} fontSize={13} fill={props.mutedColor}>暂无数据</text> : null}
+  </g>;
+}
+
+function polarPoint(cx: number, cy: number, r: number, angle: number): { x: number; y: number } {
+  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+}
+
+/** Wedge of an annulus (a donut slice) between two angles, built from two arcs rather than a
+ *  filled circle sector so the chart can carve out a center hole for the total-count figure. */
+function donutSlicePath(cx: number, cy: number, innerR: number, outerR: number, startAngle: number, endAngle: number): string {
+  const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
+  const outerStart = polarPoint(cx, cy, outerR, startAngle);
+  const outerEnd = polarPoint(cx, cy, outerR, endAngle);
+  const innerStart = polarPoint(cx, cy, innerR, endAngle);
+  const innerEnd = polarPoint(cx, cy, innerR, startAngle);
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerStart.x} ${innerStart.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerEnd.x} ${innerEnd.y}`,
+    "Z"
+  ].join(" ");
+}
+
+interface DonutChartProps {
+  readonly segments: readonly Segment[];
+  readonly total: number;
+  readonly totalLabel: string;
+  readonly textColor: string;
+  readonly mutedColor: string;
+  readonly trackColor: string;
+}
+
+/** Part-to-whole as a real pie/donut, offered as an alternate view alongside SegmentBarChart -
+ *  same segments, same legend, just a circular mark instead of a bar for readers who want it.
+ *  The 2px surface gap between slices is approximated as a small angular inset so wedges read as
+ *  distinct without an outline stroke (see the dataviz skill's mark spec). */
+export const DonutChart = forwardRef<SVGSVGElement, DonutChartProps>((props, ref) => {
+  const width = 640;
+  const cx = 130;
+  const cy = 130;
+  const outerR = 108;
+  const innerR = 62;
+  const plotHeight = 260;
+  const nonZero = props.segments.filter((segment) => segment.value > 0);
+  const legendRowHeight = 24;
+  const height = plotHeight + Math.max(nonZero.length, 1) * legendRowHeight + 8;
+  const gapAngle = nonZero.length > 1 ? 2 / outerR : 0;
+
+  let cursor = -Math.PI / 2;
+  const slices = nonZero.map((segment) => {
+    const share = props.total > 0 ? segment.value / props.total : 0;
+    const sweep = share * Math.PI * 2;
+    const start = cursor + gapAngle / 2;
+    const end = cursor + sweep - gapAngle / 2;
+    cursor += sweep;
+    const percent = Math.round(share * 100);
+    const mid = (start + end) / 2;
+    const labelPoint = polarPoint(cx, cy, (innerR + outerR) / 2, mid);
+    const showLabel = end > start && share >= 0.08;
+    return <g key={segment.key}>
+      <path d={donutSlicePath(cx, cy, innerR, outerR, Math.min(start, end), Math.max(start, end))} fill={segment.color}>
+        <title>{`${segment.label}：${segment.value}（${percent}%）`}</title>
+      </path>
+      {showLabel ? <text x={labelPoint.x} y={labelPoint.y} textAnchor="middle" dominantBaseline="middle" fontFamily={FONT} fontSize={13} fontWeight={600} fill="#ffffff">{percent}%</text> : null}
+    </g>;
+  });
+
+  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="饼图">
+    <g transform={`translate(${(width - cx * 2) / 2}, 0)`}>
+      {nonZero.length === 0
+        ? <circle cx={cx} cy={cy} r={outerR} fill={props.trackColor} />
+        : <>
+          <circle cx={cx} cy={cy} r={outerR} fill="none" />
+          {slices}
+        </>}
+      <text x={cx} y={cy - 6} textAnchor="middle" fontFamily={FONT} fontSize={26} fontWeight={700} fill={props.textColor} style={{ fontVariantNumeric: "tabular-nums" }}>{props.total}</text>
+      <text x={cx} y={cy + 16} textAnchor="middle" fontFamily={FONT} fontSize={12.5} fill={props.mutedColor}>{props.totalLabel}</text>
+    </g>
+    <SegmentLegend segments={nonZero} total={props.total} textColor={props.textColor} mutedColor={props.mutedColor} y={plotHeight} />
+  </svg>;
+});
+DonutChart.displayName = "DonutChart";
+
 export interface RankedItem {
   readonly key: string;
   readonly label: string;
@@ -111,3 +214,127 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
   </svg>;
 });
 RankedBarChart.displayName = "RankedBarChart";
+
+export interface BoxPlotPoint {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+}
+
+export interface BoxPlotSeries {
+  readonly key: string;
+  readonly label: string;
+  readonly points: readonly BoxPlotPoint[];
+  readonly formatValue?: (value: number) => string;
+}
+
+interface BoxPlotStats {
+  readonly min: number;
+  readonly q1: number;
+  readonly median: number;
+  readonly q3: number;
+  readonly max: number;
+  readonly lowerWhisker: number;
+  readonly upperWhisker: number;
+  readonly outliers: readonly BoxPlotPoint[];
+}
+
+function medianOf(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const mid = Math.floor(values.length / 2);
+  return values.length % 2 === 0 ? (values[mid - 1]! + values[mid]!) / 2 : values[mid]!;
+}
+
+/** Tukey hinges: split the sorted set at the median (excluding it on an odd count) and take the
+ *  median of each half as Q1/Q3, then flag anything past 1.5·IQR from the box as an outlier -
+ *  the standard box-and-whisker convention so results read the same as any stats tool. */
+function computeBoxPlotStats(points: readonly BoxPlotPoint[]): BoxPlotStats {
+  const sorted = [...points].sort((a, b) => a.value - b.value);
+  const values = sorted.map((point) => point.value);
+  const n = values.length;
+  const lowerHalf = n % 2 === 0 ? values.slice(0, n / 2) : values.slice(0, (n - 1) / 2);
+  const upperHalf = n % 2 === 0 ? values.slice(n / 2) : values.slice((n + 1) / 2);
+  const q1 = medianOf(lowerHalf.length > 0 ? lowerHalf : values);
+  const q3 = medianOf(upperHalf.length > 0 ? upperHalf : values);
+  const iqr = q3 - q1;
+  const lowerFence = q1 - 1.5 * iqr;
+  const upperFence = q3 + 1.5 * iqr;
+  const withinLower = values.filter((value) => value >= lowerFence);
+  const withinUpper = values.filter((value) => value <= upperFence);
+  return {
+    min: values[0]!,
+    q1,
+    median: medianOf(values),
+    q3,
+    max: values[n - 1]!,
+    lowerWhisker: withinLower.length > 0 ? Math.min(...withinLower) : values[0]!,
+    upperWhisker: withinUpper.length > 0 ? Math.max(...withinUpper) : values[n - 1]!,
+    outliers: sorted.filter((point) => point.value < lowerFence || point.value > upperFence)
+  };
+}
+
+interface BoxPlotChartProps {
+  readonly series: readonly BoxPlotSeries[];
+  readonly boxColor: string;
+  readonly outlierColor: string;
+  readonly trackColor: string;
+  readonly labelColor: string;
+  readonly valueColor: string;
+}
+
+/** One small-multiple row per metric rather than a single shared axis: 中率/抽过公演数/中选次数
+ *  live on incompatible scales (a percentage next to a raw count), and a box plot's whole point -
+ *  reading the spread - breaks the moment two series fight over one axis. Each row gets its own
+ *  domain so the box, whiskers and outlier dots stay legible regardless of the other rows' scale. */
+export const BoxPlotChart = forwardRef<SVGSVGElement, BoxPlotChartProps>((props, ref) => {
+  const width = 640;
+  const rowHeight = 56;
+  const labelWidth = 130;
+  const valueWidth = 150;
+  const trackWidth = width - labelWidth - valueWidth;
+  const boxThickness = 20;
+  const height = props.series.length > 0 ? props.series.length * rowHeight : rowHeight;
+
+  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="箱型图">
+    {props.series.length === 0
+      ? <text x={0} y={rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
+      : props.series.map((series, index) => {
+        const y = index * rowHeight;
+        const rowCenter = y + rowHeight / 2;
+        const format = series.formatValue ?? ((value: number) => value.toFixed(1));
+        if (series.points.length === 0) {
+          return <g key={series.key}>
+            <text x={0} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>{series.label}</text>
+            <text x={labelWidth} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>暂无数据</text>
+          </g>;
+        }
+
+        const stats = computeBoxPlotStats(series.points);
+        const domainMin = Math.min(stats.min, ...stats.outliers.map((point) => point.value));
+        const domainMax = Math.max(stats.max, ...stats.outliers.map((point) => point.value));
+        const span = domainMax - domainMin || 1;
+        const scale = (value: number) => labelWidth + ((value - domainMin) / span) * trackWidth;
+
+        return <g key={series.key}>
+          <text x={0} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>
+            <title>{series.label}</title>
+            {truncateLabel(series.label)}
+          </text>
+          <line x1={scale(stats.lowerWhisker)} x2={scale(stats.upperWhisker)} y1={rowCenter} y2={rowCenter} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
+          <line x1={scale(stats.lowerWhisker)} x2={scale(stats.lowerWhisker)} y1={rowCenter - boxThickness / 3} y2={rowCenter + boxThickness / 3} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
+          <line x1={scale(stats.upperWhisker)} x2={scale(stats.upperWhisker)} y1={rowCenter - boxThickness / 3} y2={rowCenter + boxThickness / 3} stroke={props.labelColor} strokeWidth={1} opacity={0.6} />
+          <rect x={Math.min(scale(stats.q1), scale(stats.q3))} y={rowCenter - boxThickness / 2} width={Math.max(Math.abs(scale(stats.q3) - scale(stats.q1)), 2)} height={boxThickness} rx={4} fill={props.boxColor}>
+            <title>{`${series.label}：Q1 ${format(stats.q1)} · 中位数 ${format(stats.median)} · Q3 ${format(stats.q3)}`}</title>
+          </rect>
+          <line x1={scale(stats.median)} x2={scale(stats.median)} y1={rowCenter - boxThickness / 2} y2={rowCenter + boxThickness / 2} stroke={props.trackColor} strokeWidth={2} />
+          {stats.outliers.map((point) => <circle key={point.key} cx={scale(point.value)} cy={rowCenter} r={4} fill={props.outlierColor} stroke={props.trackColor} strokeWidth={2}>
+            <title>{`${point.label}：${format(point.value)}（离群值）`}</title>
+          </circle>)}
+          <text x={labelWidth + trackWidth + 10} y={rowCenter} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>
+            中位数 {format(stats.median)}
+          </text>
+        </g>;
+      })}
+  </svg>;
+});
+BoxPlotChart.displayName = "BoxPlotChart";

@@ -20,10 +20,9 @@ describe("IPC Security", () => {
     await createFixture();
     expect(new Set(handlers.keys())).toEqual(new Set([
       "app:get-state",
-      "account:add",
-      "account:import",
       "account:import-harvest",
       "account:delete",
+      "account:set-password",
       "account:reveal-password",
       "profile:get",
       "profile:list-lottery-records",
@@ -41,15 +40,6 @@ describe("IPC Security", () => {
       expect(result.status).toBe("rejected");
       if (result.status === "rejected") expect(result.reason).toMatchObject({ message: "Unauthorized IPC sender." });
     }
-  });
-
-  it("account:add validates sender identity and rejects malformed payloads", async () => {
-    const fixture = await createFixture();
-    const addAccount = requireHandler("account:add");
-
-    await expect(addAccount({ sender: {} }, { eplusEmail: "person@example.test", password: "secret" })).rejects.toThrow("Unauthorized IPC sender");
-    await expect(addAccount(rendererEvent(fixture.webContents), { eplusEmail: "not-an-email", password: "secret" })).rejects.toThrow("Invalid IPC payload");
-    await expect(addAccount(rendererEvent(fixture.webContents), { eplusEmail: "person@example.test", password: "secret" })).resolves.toMatchObject({ eplusEmail: "person@example.test" });
   });
 
   it("account:import-harvest validates the harvest JSON shape and matches an existing account by email", async () => {
@@ -70,6 +60,15 @@ describe("IPC Security", () => {
       }
     });
     expect(result).toMatchObject({ accountId: fixture.accountId, accountCreated: false, report: { inserted: 1 } });
+  });
+
+  it("account:set-password validates sender identity and rejects malformed payloads", async () => {
+    const fixture = await createFixture();
+    const setPassword = requireHandler("account:set-password");
+
+    await expect(setPassword({ sender: {} }, { accountId: fixture.accountId, password: "secret" })).rejects.toThrow("Unauthorized IPC sender");
+    await expect(setPassword(rendererEvent(fixture.webContents), { accountId: fixture.accountId, password: "" })).rejects.toThrow("Invalid IPC payload");
+    await expect(setPassword(rendererEvent(fixture.webContents), { accountId: fixture.accountId, password: "secret" })).resolves.toBeUndefined();
   });
 
   it("account:import-harvest tolerates the userscript's extra harvestedPages field instead of rejecting it", async () => {

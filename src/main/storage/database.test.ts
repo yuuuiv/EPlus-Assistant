@@ -97,6 +97,23 @@ describe("AppDatabase storage primitives", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.status).toBe("当選");
   });
+
+  it("keeps records from an earlier import that a later, partial re-import doesn't mention", async () => {
+    const database = await openDatabase();
+    const account = database.upsertAccount({ eplusEmail: "person@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
+    const now = "2026-07-21T00:00:00.000Z";
+    database.upsertLotteryRecords(account.id, [
+      { id: "r1", accountId: account.id, orderId: "order-1", tourName: "Event A", status: "抽選前", harvestedAt: now },
+      { id: "r2", accountId: account.id, orderId: "order-2", tourName: "Event B", status: "落選", harvestedAt: now }
+    ]);
+
+    // A later collection run only re-scraped/exported one new record - order-1 isn't mentioned
+    // at all, which must not be read as "order-1 no longer exists."
+    database.upsertLotteryRecords(account.id, [{ id: "r3", accountId: account.id, orderId: "order-3", tourName: "Event C", status: "当選", harvestedAt: now }]);
+
+    const records = database.listLotteryRecords(account.id);
+    expect(records.map((record) => record.orderId).sort()).toEqual(["order-1", "order-2", "order-3"]);
+  });
 });
 
 async function openDatabase(): Promise<AppDatabase> {

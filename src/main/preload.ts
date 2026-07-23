@@ -3,10 +3,9 @@ import type { ElectronApi } from "../shared/ipc.js";
 
 const api: ElectronApi = {
   getState: () => ipcRenderer.invoke("app:get-state"),
-  addAccount: (input) => ipcRenderer.invoke("account:add", input),
-  importAccounts: (input) => ipcRenderer.invoke("account:import", input),
   importHarvest: (input) => ipcRenderer.invoke("account:import-harvest", input),
   deleteAccount: (id) => ipcRenderer.invoke("account:delete", id),
+  setAccountPassword: (input) => ipcRenderer.invoke("account:set-password", input),
   revealPassword: (accountId) => ipcRenderer.invoke("account:reveal-password", accountId),
   listProfiles: (accountId) => ipcRenderer.invoke("profile:get", accountId),
   listLotteryRecords: (accountId) => ipcRenderer.invoke("profile:list-lottery-records", accountId),

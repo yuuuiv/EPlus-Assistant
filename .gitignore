@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-electron/
 out/
+release/
 *.log
 
 # Runtime data: never commit credentials, browser sessions, local DB, or evidence.

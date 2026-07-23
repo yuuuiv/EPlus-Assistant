@@ -162,7 +162,11 @@ export class AppDatabase {
 
   async open(): Promise<void> {
     mkdirSync(this.dataDir, { recursive: true });
-    this.SQL = await initSqlJs({ locateFile: (file) => path.join(process.cwd(), "node_modules", "sql.js", "dist", file) });
+    // Resolved via Node's module resolution (not process.cwd()) so it finds sql.js's wasm
+    // binary regardless of the process's working directory - including inside a packaged app's
+    // asar archive, where cwd has no fixed relationship to the install location.
+    const sqlJsDist = path.dirname(require.resolve("sql.js"));
+    this.SQL = await initSqlJs({ locateFile: (file) => path.join(sqlJsDist, file) });
     this.db = existsSync(this.dbFile) ? new this.SQL.Database(readFileSync(this.dbFile)) : new this.SQL.Database();
     this.migrate();
     this.exec("pragma foreign_keys = on");
@@ -180,13 +184,24 @@ export class AppDatabase {
     const stored = this.getStoredAccount(id); if (!stored) throw new Error("Account write failed."); return stored;
   }
   deleteAccount(id: string): void { this.inTransaction(() => { this.run("delete from account_profiles where account_id=?", [id]); this.run("delete from lottery_records where account_id=?", [id]); this.run("delete from password_reveal_sessions where account_id=?", [id]); this.run("delete from accounts where id=?", [id]); }); }
+  updateAccountPassword(id: string, encryptedPassword: string): void { this.run("update accounts set encrypted_eplus_password = ?, updated_at = ? where id = ?", [encryptedPassword, new Date().toISOString(), id]); }
 
   upsertProfile(profile: AccountProfile): AccountProfile { const now = new Date().toISOString(); this.run(`insert into account_profiles (id,account_id,eplus_email,encrypted_password,reveal_supported,phone,name,name_kana,gender,birth_year,address,credit_cards_json,companions_json,past_companions_json,harvested_at,harvest_status,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id) do update set eplus_email=excluded.eplus_email,encrypted_password=excluded.encrypted_password,reveal_supported=excluded.reveal_supported,phone=coalesce(excluded.phone,account_profiles.phone),name=coalesce(excluded.name,account_profiles.name),name_kana=coalesce(excluded.name_kana,account_profiles.name_kana),gender=coalesce(excluded.gender,account_profiles.gender),birth_year=coalesce(excluded.birth_year,account_profiles.birth_year),address=coalesce(excluded.address,account_profiles.address),credit_cards_json=excluded.credit_cards_json,companions_json=excluded.companions_json,past_companions_json=excluded.past_companions_json,harvested_at=excluded.harvested_at,harvest_status=excluded.harvest_status,updated_at=excluded.updated_at`, [randomUUID(), profile.accountId, profile.eplusEmail, profile.encryptedPassword, profile.revealSupported ? 1 : 0, profile.phone ?? null, profile.name ?? null, profile.nameKana ?? null, profile.gender ?? null, profile.birthYear ?? null, profile.address ?? null, JSON.stringify(profile.creditCards ?? []), JSON.stringify(profile.companions), JSON.stringify(profile.pastCompanions), profile.harvestedAt, profile.harvestStatus, now, now]); return profile; }
   getProfile(accountId: string): AccountProfile | undefined { const row = this.query<Row>("select * from account_profiles where account_id=?",[accountId])[0]; return row ? rowToProfile(row) : undefined; }
   listAllProfiles(): AccountProfile[] { return this.query<Row>("select * from account_profiles").map(rowToProfile); }
   deleteProfile(accountId: string): void { this.run("delete from account_profiles where account_id=?",[accountId]); }
 
-  upsertLotteryRecords(accountId: string, records: readonly LotteryRecord[]): LotteryRecord[] { this.inTransaction(() => { for (const record of records) this.run("insert into lottery_records (id,account_id,order_id,tour_name,event_datetime,venue_name,reception_name,order_datetime,status,status_detail,detail_url,harvested_at,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id,order_id) do update set tour_name=excluded.tour_name,event_datetime=excluded.event_datetime,venue_name=excluded.venue_name,reception_name=excluded.reception_name,order_datetime=excluded.order_datetime,status=excluded.status,status_detail=excluded.status_detail,detail_url=excluded.detail_url,harvested_at=excluded.harvested_at", [record.id, accountId, record.orderId, record.tourName, record.eventDatetime ?? null, record.venueName ?? null, record.receptionName ?? null, record.orderDatetime ?? null, record.status, record.statusDetail ?? null, record.detailUrl ?? null, record.harvestedAt, new Date().toISOString()]); }); return this.listLotteryRecords(accountId); }
+  /** A harvest export can be a partial, incremental re-collection (the userscript doesn't
+   *  necessarily re-visit every page on every run), so an import must never delete records that
+   *  are simply absent from this particular payload - that would erase real history the site
+   *  still has, just because this run didn't happen to re-scrape it. Records only ever accumulate
+   *  or get refreshed in place by (account, orderId). */
+  upsertLotteryRecords(accountId: string, records: readonly LotteryRecord[]): LotteryRecord[] {
+    this.inTransaction(() => {
+      for (const record of records) this.run("insert into lottery_records (id,account_id,order_id,tour_name,event_datetime,venue_name,reception_name,order_datetime,status,status_detail,detail_url,harvested_at,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id,order_id) do update set tour_name=excluded.tour_name,event_datetime=excluded.event_datetime,venue_name=excluded.venue_name,reception_name=excluded.reception_name,order_datetime=excluded.order_datetime,status=excluded.status,status_detail=excluded.status_detail,detail_url=excluded.detail_url,harvested_at=excluded.harvested_at", [record.id, accountId, record.orderId, record.tourName, record.eventDatetime ?? null, record.venueName ?? null, record.receptionName ?? null, record.orderDatetime ?? null, record.status, record.statusDetail ?? null, record.detailUrl ?? null, record.harvestedAt, new Date().toISOString()]);
+    });
+    return this.listLotteryRecords(accountId);
+  }
   listLotteryRecords(accountId: string): LotteryRecord[] { return this.query<Row>("select * from lottery_records where account_id=? order by harvested_at desc",[accountId]).map(rowToLotteryRecord); }
   listAllLotteryRecords(): LotteryRecord[] { return this.query<Row>("select * from lottery_records order by harvested_at desc").map(rowToLotteryRecord); }
 

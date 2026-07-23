@@ -1,11 +1,20 @@
-import { Download, Flame, History, ImageDown, PercentCircle, PieChart, Ticket, Trophy, Users } from "lucide-react";
+import { BarChart3, Download, Flame, History, ImageDown, PercentCircle, PieChart, SquareStack, Ticket, Trophy, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { AccountOverviewEntry, AccountsOverview, LotteryOutcome, LotteryRecord, PerformanceHistory, TopPerformanceEntry } from "../../shared/ipc.js";
 import { csvCell, downloadSvgAsPng, downloadTextFile, formatDateTime, formatPercent } from "../format.js";
 import { useThemeColors } from "../useThemeColors.js";
-import { RankedBarChart, SegmentBarChart, type RankedItem, type Segment } from "./Charts.js";
+import { BoxPlotChart, DonutChart, RankedBarChart, SegmentBarChart, type BoxPlotSeries, type RankedItem, type Segment } from "./Charts.js";
 import { Modal } from "./Modal.js";
 import { SortableFilterableTable, type Column } from "./SortableFilterableTable.js";
+
+type SegmentChartMode = "bar" | "pie";
+
+function SegmentChartModeToggle(props: { readonly mode: SegmentChartMode; readonly onChange: (mode: SegmentChartMode) => void }) {
+  return <div className="segmented" role="group" aria-label="切换图表类型">
+    <button className={props.mode === "bar" ? "seg active" : "seg"} onClick={() => props.onChange("bar")} title="条形图"><BarChart3 size={14} /></button>
+    <button className={props.mode === "pie" ? "seg active" : "seg"} onClick={() => props.onChange("pie")} title="饼图"><PieChart size={14} /></button>
+  </div>;
+}
 
 interface AccountOverviewProps {
   readonly overview: AccountsOverview | undefined;
@@ -26,10 +35,13 @@ const OUTCOME_LABEL: Record<LotteryOutcome, string> = { won: "当选", lost: "�
 
 export function AccountOverview(props: AccountOverviewProps) {
   const [modalAccount, setModalAccount] = useState<AccountOverviewEntry>();
+  const [genderChartMode, setGenderChartMode] = useState<SegmentChartMode>("bar");
+  const [outcomeChartMode, setOutcomeChartMode] = useState<SegmentChartMode>("bar");
   const colors = useThemeColors();
   const genderChartRef = useRef<SVGSVGElement>(null);
   const outcomeChartRef = useRef<SVGSVGElement>(null);
   const winRateChartRef = useRef<SVGSVGElement>(null);
+  const performanceBoxPlotRef = useRef<SVGSVGElement>(null);
 
   if (props.loading || !props.overview) {
     return <section className="workspace-panel" aria-labelledby="overview-title">
@@ -68,6 +80,30 @@ export function AccountOverview(props: AccountOverviewProps) {
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 15);
+
+  const accountLabel = (entry: AccountOverviewEntry) => entry.account.label || entry.account.eplusEmail;
+  const performanceBoxPlotSeries: BoxPlotSeries[] = [
+    {
+      key: "winRate",
+      label: "中率（%）",
+      formatValue: (value) => `${Math.round(value)}%`,
+      points: overview.accounts
+        .filter((entry) => entry.stats.winRate !== null)
+        .map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: Math.round((entry.stats.winRate ?? 0) * 100) }))
+    },
+    {
+      key: "distinctPerformances",
+      label: "抽过公演数",
+      formatValue: (value) => `${Math.round(value)} 场`,
+      points: overview.accounts.map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: entry.stats.distinctPerformanceCount }))
+    },
+    {
+      key: "winCount",
+      label: "中选次数",
+      formatValue: (value) => `${Math.round(value)} 次`,
+      points: overview.accounts.map((entry) => ({ key: entry.account.id, label: accountLabel(entry), value: entry.stats.winCount }))
+    }
+  ];
 
   function exportOverviewCsv(): void {
     const header = ["账号", "邮箱", "性别", "中选次数", "抽过公演数", "中选公演数", "中率(%)", "资料最后更新"];
@@ -118,18 +154,28 @@ export function AccountOverview(props: AccountOverviewProps) {
 
     <div className="panel-layout-two">
       <section className="panel-card">
-        <div className="panel-head"><h2><PieChart size={16} />性别分布</h2><button className="icon-button" onClick={() => void exportChart(genderChartRef, "性别分布")}><ImageDown size={14} />导出图片</button></div>
-        <SegmentBarChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+        <div className="panel-head"><h2><PieChart size={16} />性别分布</h2><div className="actions"><SegmentChartModeToggle mode={genderChartMode} onChange={setGenderChartMode} /><button className="icon-button" onClick={() => void exportChart(genderChartRef, "性别分布")}><ImageDown size={14} />导出图片</button></div></div>
+        {genderChartMode === "bar"
+          ? <SegmentBarChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+          : <DonutChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} totalLabel="账号总数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
       </section>
       <section className="panel-card">
-        <div className="panel-head"><h2><Trophy size={16} />抽选记录结果分布</h2><button className="icon-button" onClick={() => void exportChart(outcomeChartRef, "抽选结果分布")}><ImageDown size={14} />导出图片</button></div>
-        <SegmentBarChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+        <div className="panel-head"><h2><Trophy size={16} />抽选记录结果分布</h2><div className="actions"><SegmentChartModeToggle mode={outcomeChartMode} onChange={setOutcomeChartMode} /><button className="icon-button" onClick={() => void exportChart(outcomeChartRef, "抽选结果分布")}><ImageDown size={14} />导出图片</button></div></div>
+        {outcomeChartMode === "bar"
+          ? <SegmentBarChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+          : <DonutChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} totalLabel="抽选记录数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
       </section>
     </div>
 
     <section className="panel-card">
       <div className="panel-head"><h2><PercentCircle size={16} />中率排行榜</h2><button className="icon-button" onClick={() => void exportChart(winRateChartRef, "中率排行榜")}><ImageDown size={14} />导出图片</button></div>
       <RankedBarChart ref={winRateChartRef} items={winRateItems} barColor={colors.primary} trackColor={colors.surfaceC} labelColor={colors.textMuted} valueColor={colors.text} maxValue={100} />
+    </section>
+
+    <section className="panel-card">
+      <div className="panel-head"><h2><SquareStack size={16} />账号表现分布（箱型图）</h2><button className="icon-button" onClick={() => void exportChart(performanceBoxPlotRef, "账号表现分布")}><ImageDown size={14} />导出图片</button></div>
+      <p className="muted">箱体覆盖中间 50% 的账号（Q1–Q3），线为中位数；圆点为明显偏离整体水平的离群账号。</p>
+      <BoxPlotChart ref={performanceBoxPlotRef} series={performanceBoxPlotSeries} boxColor={colors.primary} outlierColor={colors.danger} trackColor={colors.surfaceSolid} labelColor={colors.textMuted} valueColor={colors.text} />
     </section>
 
     <div className="panel-layout-two">
