@@ -222,6 +222,12 @@
 .companion-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .companion-groups div { min-width: 0; }
 .companion-groups p { margin: var(--space-1) 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.companion-card { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-a); }
+.companion-card + .companion-card { margin-top: var(--space-2); }
+.companion-info { display: grid; gap: 0.15rem; min-width: 0; }
+.companion-info strong { font-size: 0.92rem; }
+.companion-email { color: var(--text-muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.companion-time { color: var(--text-subtle); font-size: 0.75rem; }
 .card-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .card-brand-badge { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: var(--radius-pill); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; flex: 0 0 auto; }
 
@@ -935,10 +941,15 @@ tbody tr:last-child td { border-bottom: none; }
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: rgba(6, 8, 14, 0.55);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
+  background: rgba(6, 8, 14, 0.6);
+  /* No backdrop-filter: blurring the full viewport while it's simultaneously animating in is
+     one of the most expensive things a compositor can do, and was the main source of the
+     open-animation jank - a plain dim reads as intentional and costs nothing to animate. */
 }
+/* vaul's default timing (500ms) reads as sluggish for a sheet this size; match the app's
+   other motion (~300ms, same family as the password-edit reveal). */
+[data-vaul-overlay] { animation-duration: 220ms !important; }
+[data-vaul-drawer] { transition-duration: 300ms !important; animation-duration: 300ms !important; }
 .drawer-content {
   position: fixed;
   z-index: 1201;
@@ -1013,6 +1024,11 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ── Charts ──────────────────────────────────────────────────────────── */
 .chart-svg { display: block; width: 100%; height: auto; }
+.chart-swap { animation: chart-fade-in 260ms var(--ease-out) both; }
+@keyframes chart-fade-in { from { opacity: 0; transform: translateY(4px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .chart-swap { animation: none; }
+}
 
 /* ── Activity feed / ranking lists (overview: recent draws, hottest shows) ── */
 .activity-list, .ranking-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; max-block-size: 26rem; overflow: auto; }

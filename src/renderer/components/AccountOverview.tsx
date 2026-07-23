@@ -130,15 +130,19 @@ export function AccountOverview(props: AccountOverviewProps) {
     <div className="panel-layout-two">
       <section className="panel-card">
         <div className="panel-head"><h2><PieChart size={16} />性别分布</h2><div className="actions"><SegmentChartModeToggle mode={genderChartMode} onChange={setGenderChartMode} /><button className="icon-button" onClick={() => void exportChart(genderChartRef, "性别分布")}><ImageDown size={14} />导出图片</button></div></div>
-        {genderChartMode === "bar"
-          ? <SegmentBarChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
-          : <DonutChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} totalLabel="账号总数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
+        <div key={genderChartMode} className="chart-swap">
+          {genderChartMode === "bar"
+            ? <SegmentBarChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+            : <DonutChart ref={genderChartRef} segments={genderSegments} total={overview.totalAccounts} totalLabel="账号总数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
+        </div>
       </section>
       <section className="panel-card">
         <div className="panel-head"><h2><Trophy size={16} />抽选记录结果分布</h2><div className="actions"><SegmentChartModeToggle mode={outcomeChartMode} onChange={setOutcomeChartMode} /><button className="icon-button" onClick={() => void exportChart(outcomeChartRef, "抽选结果分布")}><ImageDown size={14} />导出图片</button></div></div>
-        {outcomeChartMode === "bar"
-          ? <SegmentBarChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
-          : <DonutChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} totalLabel="抽选记录数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
+        <div key={outcomeChartMode} className="chart-swap">
+          {outcomeChartMode === "bar"
+            ? <SegmentBarChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />
+            : <DonutChart ref={outcomeChartRef} segments={outcomeSegments} total={totalRecords} totalLabel="抽选记录数" trackColor={colors.surfaceC} textColor={colors.text} mutedColor={colors.textMuted} />}
+        </div>
       </section>
     </div>
 

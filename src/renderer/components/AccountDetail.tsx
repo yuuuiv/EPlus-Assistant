@@ -129,7 +129,14 @@ export function AccountDetail(props: AccountDetailProps) {
             </div>
           </div>
         </article>
-        <article className="detail-block"><h3>同行者</h3><div className="companion-groups"><div><strong>当前同行者</strong>{(profile?.companions ?? []).length > 0 ? (profile?.companions ?? []).map((companion) => <p key={`${companion.companionId ?? companion.name}`}>{companion.name}{companion.maskedEmail ? ` · ${companion.maskedEmail}` : ""}{companion.approvedAt ? ` · ${companion.approvedAt}` : ""}</p>) : <p className="muted">暂无当前同行者。</p>}</div></div><div className="card-summary"><strong>已绑定信用卡</strong>{(profile?.creditCards ?? []).length > 0 ? (profile?.creditCards ?? []).map((card) => {
+        <article className="detail-block"><h3>同行者</h3><div className="companion-groups"><div><strong>当前同行者</strong>{(profile?.companions ?? []).length > 0 ? (profile?.companions ?? []).map((companion, index) => <div key={`${companion.companionId ?? companion.name}`} className="companion-card">
+              <span className="ranking-index">{index + 1}</span>
+              <div className="companion-info">
+                <strong>{companion.name}</strong>
+                {companion.maskedEmail ? <span className="companion-email">{companion.maskedEmail}</span> : null}
+                {companion.approvedAt ? <span className="companion-time">绑定于 {companion.approvedAt}</span> : null}
+              </div>
+            </div>) : <p className="muted">暂无当前同行者。</p>}</div></div><div className="card-summary"><strong>已绑定信用卡</strong>{(profile?.creditCards ?? []).length > 0 ? (profile?.creditCards ?? []).map((card) => {
               const brand = toHalfWidth(card.brand || "Card");
               const accent = cardBrandAccent(brand);
               return <p key={`${card.creditCardId ?? `${card.brand}-${card.last4}`}`} className="card-row">
