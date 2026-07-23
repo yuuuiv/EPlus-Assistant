@@ -16,29 +16,19 @@ const directories: string[] = [];
 afterEach(async () => { handlers.clear(); await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
 describe("IPC Security", () => {
-  it("queue commands validate sender identity and payloads", async () => {
-    const fixture = await createFixture();
-    const enqueue = requireHandler("queue:enqueue-task");
-    const pause = requireHandler("queue:pause");
-
-    await expect(enqueue({ sender: {} }, fixture.taskId)).rejects.toThrow("Unauthorized IPC sender");
-    await expect(enqueue(rendererEvent(fixture.webContents), "")).rejects.toThrow("Invalid IPC payload");
-    await expect(pause({ sender: {} })).rejects.toThrow("Unauthorized IPC sender");
-  });
-
-  it("manual actions validate runId, action, sender, and stale run ownership", async () => {
-    const fixture = await createFixture();
-    const manualAction = requireHandler("run:manual-action");
-
-    await expect(manualAction({ sender: {} }, { runId: fixture.runId, action: "continue" })).rejects.toThrow("Unauthorized IPC sender");
-    await expect(manualAction(rendererEvent(fixture.webContents), { runId: fixture.runId, action: "forged" })).rejects.toThrow("Invalid IPC payload");
-    await expect(manualAction(rendererEvent(fixture.webContents), { runId: fixture.runId, action: "continue" })).rejects.toThrow("manual checkpoint");
-  });
-
-  it("does not register renderer-controlled status mutation channels", async () => {
+  it("registers exactly the trimmed account-management channel set", async () => {
     await createFixture();
-    expect(handlers.has("task:update-status")).toBe(false);
-    expect(handlers.has("run:update-status")).toBe(false);
+    expect(new Set(handlers.keys())).toEqual(new Set([
+      "app:get-state",
+      "account:add",
+      "account:import",
+      "account:import-harvest",
+      "account:delete",
+      "account:reveal-password",
+      "profile:get",
+      "profile:list-lottery-records",
+      "app:open-data-folder"
+    ]));
   });
 
   it("rejects an unexpected sender before every registered handler parses its payload", async () => {
@@ -51,6 +41,35 @@ describe("IPC Security", () => {
       if (result.status === "rejected") expect(result.reason).toMatchObject({ message: "Unauthorized IPC sender." });
     }
   });
+
+  it("account:add validates sender identity and rejects malformed payloads", async () => {
+    const fixture = await createFixture();
+    const addAccount = requireHandler("account:add");
+
+    await expect(addAccount({ sender: {} }, { eplusEmail: "person@example.test", password: "secret" })).rejects.toThrow("Unauthorized IPC sender");
+    await expect(addAccount(rendererEvent(fixture.webContents), { eplusEmail: "not-an-email", password: "secret" })).rejects.toThrow("Invalid IPC payload");
+    await expect(addAccount(rendererEvent(fixture.webContents), { eplusEmail: "person@example.test", password: "secret" })).resolves.toMatchObject({ eplusEmail: "person@example.test" });
+  });
+
+  it("account:import-harvest validates the harvest JSON shape and matches an existing account by email", async () => {
+    const fixture = await createFixture();
+    const importHarvest = requireHandler("account:import-harvest");
+
+    await expect(importHarvest(rendererEvent(fixture.webContents), { payload: { schemaVersion: 2, eplusEmail: "a@example.test", collectedAt: "now", profile: {}, creditCards: [], companions: [], lotteryRecords: [] } })).rejects.toThrow("Invalid IPC payload");
+
+    const result = await importHarvest(rendererEvent(fixture.webContents), {
+      payload: {
+        schemaVersion: 1,
+        eplusEmail: fixture.accountEmail,
+        collectedAt: "2026-07-23T00:00:00.000Z",
+        profile: { name: "Taro" },
+        creditCards: [],
+        companions: [],
+        lotteryRecords: [{ orderId: "order-1", tourName: "Event", status: "当選" }]
+      }
+    });
+    expect(result).toMatchObject({ accountId: fixture.accountId, accountCreated: false, report: { inserted: 1 } });
+  });
 });
 
 function requireHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
@@ -59,19 +78,15 @@ function requireHandler(channel: string): (...args: unknown[]) => Promise<unknow
   return async (...args) => handler(...args);
 }
 
-async function createFixture(): Promise<{ taskId: string; runId: string; webContents: { once: ReturnType<typeof vi.fn>; getURL: () => string } }> {
+async function createFixture(): Promise<{ accountId: string; accountEmail: string; webContents: { once: ReturnType<typeof vi.fn>; getURL: () => string } }> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "eplus-ipc-security-"));
   directories.push(directory);
   const db = new AppDatabase(directory);
   await db.open();
   const account = db.upsertAccount({ id: "account", eplusEmail: "person@example.test", password: "unused", encryptedPassword: "encrypted", encryptedMailConfig: "mail" });
-  db.saveEventSnapshot({ id: "event", sourceUrl: "https://eplus.jp/source", canonicalUrl: "https://eplus.jp/event", title: "Event", fetchedAt: "2026-07-21T00:00:00.000Z", pageFingerprint: "fp", rawFormSchema: { sourceKind: "standard-detail", options: [], applicationLinks: [], serialCode: { required: false, label: "Code", errorSelectors: [], knownErrorMessages: [] }, selectorHints: {}, requiresManualInspection: false, notes: [] } });
-  db.createTask({ id: "task", eventSnapshotId: "event", preference: { entries: [], paymentMethodId: "store", consentFlags: {} }, accountIds: [account.id], status: "AwaitingConfirmation", confirmationDigest: "digest", createdAt: "2026-07-21T00:00:00.000Z", updatedAt: "2026-07-21T00:00:00.000Z" });
-  const run = db.listRunsForTask("task")[0];
-  if (!run) throw new Error("Expected fixture run.");
   const webContents = { once: vi.fn(), getURL: () => "file:///app/index.html" };
-  registerIpc({ webContents } as never, db, { encryptString: vi.fn((value: string) => value), decryptString: vi.fn((value: string) => value), encryptJson: vi.fn(), decryptJson: vi.fn() } as never);
-  return { taskId: "task", runId: run.id, webContents };
+  registerIpc({ webContents } as never, db, { encryptString: vi.fn((value: string) => value), decryptString: vi.fn((value: string) => value), encryptJson: vi.fn(() => "{}"), decryptJson: vi.fn() } as never);
+  return { accountId: account.id, accountEmail: account.eplusEmail, webContents };
 }
 
 function rendererEvent(webContents: { getURL: () => string }): { sender: typeof webContents; senderFrame: { url: string } } {

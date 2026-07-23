@@ -2,7 +2,7 @@
   "name": "eplus-assistant",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first Eplus lottery workflow assistant",
+  "description": "Local-first Eplus account manager: view and import member data collected by the eplus-collector browser userscript",
   "main": "dist-electron/main/main.js",
   "scripts": {
     "dev": "npm run build:main && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && set ELECTRON_RUN_AS_NODE=&& electron .\"",
@@ -14,11 +14,9 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.4",
-    "cheerio": "^1.2.0",
     "concurrently": "^9.2.1",
     "electron": "^40.10.6",
     "lucide-react": "^0.546.0",
-    "playwright-core": "^1.56.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "sql.js": "^1.13.0",

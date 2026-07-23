@@ -1,59 +1,121 @@
-import { FolderOpen, RefreshCw, ShieldCheck, Tickets, UsersRound } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { AccountRun, DashboardState, EplusRawFormSchema, EventSnapshot, ImportReport, LotteryPreference, PaymentSelectionInput, VerificationCodeReadResult, VerificationMailboxSettings, VerificationMailboxUpdate } from "../shared/ipc.js";
+import { FolderOpen, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
+import { useState, useEffect } from "react";
+import type { DashboardState, ImportHarvestResult, ImportReport } from "../shared/ipc.js";
 import { AccountDetail } from "./components/AccountDetail.js";
 import { AccountManagement, type AccountForm } from "./components/AccountManagement.js";
-import { EventDiscovery, type EventForm } from "./components/EventDiscovery.js";
 import { LogViewer } from "./components/LogViewer.js";
-import { MailboxSettings, type MailboxForm } from "./components/MailboxSettings.js";
-import { NetworkSettingsPanel } from "./components/NetworkSettings.js";
 import { Sidebar, type PanelId } from "./components/Sidebar.js";
 import { StatusBanner } from "./components/StatusBanner.js";
-import { TaskCreation, type TaskForm } from "./components/TaskCreation.js";
-import { TaskMonitor } from "./components/TaskMonitor.js";
 import { ThemeToggle } from "./components/ThemeToggle.js";
 
-const emptyState: DashboardState = { accounts: [], events: [], tasks: [], runs: [], logs: [], verificationMailbox: { providerId: "manual", mailboxAddress: "", mode: "manual", senderAllowlist: ["eplus.co.jp"], subjectMatchers: ["認证", "确认", "代码", "e\\+"], pollingIntervalMs: 5000, timeoutMs: 180000, secretConfigured: false }, network: { controller: "clash", host: "", port: 9090, proxyGroup: "", requiredCountry: "Japan", policy: "required", secretConfigured: false }, dataDir: "" };
-const defaultPreference: LotteryPreference = { entries: [{ rank: 1, ticketTypeId: "", quantity: 1 }], applicationLinkId: "", consentFlags: {} };
-const defaultSchema: EplusRawFormSchema = { sourceKind: "unknown", options: [], applicationLinks: [], serialCode: { required: false, label: "抽选码", errorSelectors: [], knownErrorMessages: [] }, selectorHints: {}, requiresManualInspection: true, notes: ["粘贴 Eplus 网址后点击“解析页面”。"] };
-const defaultAccountForm: AccountForm = { label: "", eplusEmail: "", password: "", mailProviderId: "global-verification-mailbox", tags: "", enabled: true, mailConfig: "{}" };
-const defaultEventForm: EventForm = { sourceUrl: "https://www.eplus.jp/", canonicalUrl: "", title: "", venue: "", scheduleText: "", applicationDeadline: "", pageFingerprint: "", rawFormSchemaJson: JSON.stringify(defaultSchema, null, 2) };
-const defaultTaskForm: TaskForm = { eventSnapshotId: "", accountIds: [], preference: defaultPreference, serialCodeBatchText: "", confirmationPolicy: "required", riskAcknowledged: false, deviceProfileKey: "desktop-chrome" };
+const emptyState: DashboardState = { accounts: [], logs: [], dataDir: "" };
+const defaultAccountForm: AccountForm = { label: "", eplusEmail: "", password: "", mailProviderId: "manual", tags: "", enabled: true, mailConfig: "{}" };
 
-function mailboxToForm(settings: VerificationMailboxSettings): MailboxForm { return { providerId: settings.providerId, mailboxAddress: settings.mailboxAddress, mode: settings.mode, endpoint: settings.endpoint ?? "", username: settings.username ?? "", password: "", apiToken: "", senderAllowlist: settings.senderAllowlist, subjectMatchers: settings.subjectMatchers, senderAllowlistText: settings.senderAllowlist.join("\n"), subjectMatchersText: settings.subjectMatchers.join("\n"), pollingIntervalMs: settings.pollingIntervalMs, timeoutMs: settings.timeoutMs }; }
 function lines(value: string): string[] { return value.split(/[\n,;]/).map((item) => item.trim()).filter(Boolean); }
-function schemaFromJson(value: string): EplusRawFormSchema { try { return { ...defaultSchema, ...JSON.parse(value || "{}") }; } catch { return defaultSchema; } }
 
 export function App() {
-  const [state, setState] = useState<DashboardState>(emptyState); const [panel, setPanel] = useState<PanelId>("accounts"); const [message, setMessage] = useState(""); const [accountForm, setAccountForm] = useState<AccountForm>(defaultAccountForm); const [eventForm, setEventForm] = useState<EventForm>(defaultEventForm); const [taskForm, setTaskForm] = useState<TaskForm>(defaultTaskForm); const [mailboxForm, setMailboxForm] = useState<MailboxForm>(() => mailboxToForm(emptyState.verificationMailbox)); const [importKind, setImportKind] = useState<"csv" | "json">("csv"); const [importText, setImportText] = useState("eplusEmail,password,label,tags,enabled\n"); const [report, setReport] = useState<ImportReport>(); const [parsing, setParsing] = useState(false); const [mailboxReadResult, setMailboxReadResult] = useState<VerificationCodeReadResult>(); const [selectedAccountId, setSelectedAccountId] = useState<string>(); const [mailboxReading, setMailboxReading] = useState(false); const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
-  async function refresh(): Promise<void> { const snapshot = await window.eplusApi.getState(); setState(snapshot); setMailboxForm((current) => current.password || current.apiToken ? current : mailboxToForm(snapshot.verificationMailbox)); setTaskForm((current) => ({ ...current, eventSnapshotId: current.eventSnapshotId || snapshot.events[0]?.id || "", accountIds: current.accountIds.length ? current.accountIds : snapshot.accounts.filter((account) => account.enabled).map((account) => account.id) })); }
+  const [state, setState] = useState<DashboardState>(emptyState);
+  const [panel, setPanel] = useState<PanelId>("accounts");
+  const [message, setMessage] = useState("");
+  const [accountForm, setAccountForm] = useState<AccountForm>(defaultAccountForm);
+  const [importKind, setImportKind] = useState<"csv" | "json">("csv");
+  const [importText, setImportText] = useState("eplusEmail,password,label,tags,enabled\n");
+  const [report, setReport] = useState<ImportReport>();
+  const [harvestReport, setHarvestReport] = useState<ImportHarvestResult>();
+  const [selectedAccountId, setSelectedAccountId] = useState<string>();
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+
+  async function refresh(): Promise<void> {
+    const snapshot = await window.eplusApi.getState();
+    setState(snapshot);
+  }
   useEffect(() => { void refresh(); }, []);
-  async function runAction(action: () => Promise<void>): Promise<void> { try { await action(); } catch (error) { const text = error instanceof Error ? error.message : String(error); setMessage(`操作失败：${text}`); } }
-  function withPending(key: string, action: () => Promise<void>): () => void { return () => { if (pending.has(key)) return; setPending((current) => new Set(current).add(key)); void runAction(action).finally(() => setPending((current) => { const next = new Set(current); next.delete(key); return next; })); }; }
-  const selectedEvent = useMemo(() => state.events.find((event) => event.id === taskForm.eventSnapshotId) ?? state.events[0], [state.events, taskForm.eventSnapshotId]);
-  const eventSchema = useMemo(() => schemaFromJson(eventForm.rawFormSchemaJson), [eventForm.rawFormSchemaJson]);
-  const addAccount = withPending("addAccount", async () => { const created = await window.eplusApi.addAccount({ ...accountForm, tags: lines(accountForm.tags), mailConfig: JSON.parse(accountForm.mailConfig || "{}") }); setAccountForm(defaultAccountForm); setMessage(`已添加账号：${created.eplusEmail}`); await refresh(); });
-  const importAccounts = withPending("importAccounts", async () => { const result = await window.eplusApi.importAccounts({ kind: importKind, text: importText }); setReport(result); setMessage(`导入完成：新增 ${result.inserted}，更新 ${result.updated}`); await refresh(); });
-  const discoverEvent = () => runAction(async () => { setParsing(true); try { const discovered = await window.eplusApi.discoverEvent({ sourceUrl: eventForm.sourceUrl }); setEventForm((current) => ({ ...current, ...discovered, rawFormSchemaJson: discovered.rawFormSchemaJson ?? current.rawFormSchemaJson })); setMessage(`解析完成：${discovered.title}`); } finally { setParsing(false); } });
-  const saveEvent = withPending("saveEvent", async () => { const created = await window.eplusApi.saveEventSnapshot(eventForm); setTaskForm((current) => ({ ...current, eventSnapshotId: created.id })); setMessage(`已保存演出快照：${created.title}`); await refresh(); });
-  const deleteEvent = (id: string) => runAction(async () => { await window.eplusApi.deleteEventSnapshot(id); setMessage("演出快照已删除。"); await refresh(); });
-  const deleteTask = (id: string) => runAction(async () => { await window.eplusApi.deleteTask(id); setMessage("任务已删除。"); await refresh(); });
-  const createTask = withPending("createTask", async () => { if (!selectedEvent) throw new Error("请先保存一个演出快照。"); const created = await window.eplusApi.createTaskV2({ eventSnapshotId: selectedEvent.id, preference: taskForm.preference, accountIds: taskForm.accountIds, deviceProfileKey: taskForm.deviceProfileKey, confirmationPolicy: taskForm.confirmationPolicy, automationRiskAcknowledgement: taskForm.riskAcknowledged ? { version: 1, acknowledgedAt: new Date().toISOString(), disclosureDigest: "eplus-automation-risk-v1" } : undefined }); setMessage(`任务已创建：${created.taskId}`); setPanel("monitor"); await refresh(); });
-  const saveMailbox = withPending("saveMailbox", async () => {
-    // mailboxForm carries renderer-only textarea fields (senderAllowlistText/subjectMatchersText)
-    // that the strict IPC schema rejects; strip them and send only VerificationMailboxUpdate fields.
-    const { senderAllowlistText: _senderAllowlistText, subjectMatchersText: _subjectMatchersText, ...update } = mailboxForm;
-    const saved = await window.eplusApi.saveVerificationMailbox({ ...update, senderAllowlist: lines(mailboxForm.senderAllowlistText), subjectMatchers: lines(mailboxForm.subjectMatchersText) });
-    setMailboxForm(mailboxToForm(saved));
-    setMessage("邮箱验证码设置已保存");
+
+  async function runAction(action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setMessage(`操作失败：${text}`);
+    }
+  }
+  function withPending<Args extends unknown[]>(key: string, action: (...args: Args) => Promise<void>): (...args: Args) => void {
+    return (...args: Args) => {
+      if (pending.has(key)) return;
+      setPending((current) => new Set(current).add(key));
+      void runAction(() => action(...args)).finally(() => setPending((current) => { const next = new Set(current); next.delete(key); return next; }));
+    };
+  }
+
+  const addAccount = withPending("addAccount", async () => {
+    const created = await window.eplusApi.addAccount({ ...accountForm, tags: lines(accountForm.tags), mailConfig: JSON.parse(accountForm.mailConfig || "{}") });
+    setAccountForm(defaultAccountForm);
+    setMessage(`已添加账号：${created.eplusEmail}`);
     await refresh();
   });
-  const testMailbox = withPending("testMailbox", async () => { const result = await window.eplusApi.testVerificationMailbox(); setMessage(`${result.ok ? "配置检查通过" : "配置检查失败"}：${result.message}`); });
-  const readMailbox = () => runAction(async () => { setMailboxReading(true); try { const result = await window.eplusApi.readVerificationCode({ recipient: mailboxForm.mailboxAddress, timeoutMs: Number(mailboxForm.timeoutMs) }); setMailboxReadResult(result); setMessage(result.code ? "已读取验证码" : `验证码读取未完成：${result.reason}`); } finally { setMailboxReading(false); } });
-  const manualAction = (run: AccountRun, action: "continue" | "cancel-account" | "cancel-task" | "reconcile-unknown", verificationCode?: string) => runAction(async () => { if (action === "reconcile-unknown") await window.eplusApi.reconcileSubmission({ taskId: run.taskId, runId: run.id }); else await window.eplusApi.performManualAction({ runId: run.id, action, verificationCode }); await refresh(); });
-  const selectPayment = (input: PaymentSelectionInput) => runAction(async () => { await window.eplusApi.selectPaymentOptions(input); setMessage("已提交所选付款候选。"); await refresh(); });
-  const confirmSubmit = (taskId: string, runId: string) => runAction(async () => { const authorization = await window.eplusApi.getAuthorization({ taskId, runId }); if (!authorization || authorization.authorizationRevision === undefined || authorization.nonce === undefined) throw new Error("提交授权缺失或已失效，请重新选择付款。"); await window.eplusApi.dispatchSubmission({ taskId, runId, authorizationRevision: authorization.authorizationRevision, nonce: authorization.nonce }); setMessage("已提交，正在等待 e+ 申请完成邮件确认。"); await refresh(); }); const awaitCompletionEmail = (runId: string) => runAction(async () => { await window.eplusApi.awaitCompletionEmail(runId); setMessage("已重新检查申请完成邮件。"); await refresh(); }); const retryEmailCode = (runId: string) => runAction(async () => { await window.eplusApi.retryEmailCode(runId); setMessage("已自动重新读取验证码。"); await refresh(); });
+  const importAccounts = withPending("importAccounts", async () => {
+    const result = await window.eplusApi.importAccounts({ kind: importKind, text: importText });
+    setReport(result);
+    setMessage(`导入完成：新增 ${result.inserted}，更新 ${result.updated}`);
+    await refresh();
+  });
+  const importHarvestText = withPending<[string]>("importHarvest", async (text) => {
+    const payload = JSON.parse(text);
+    const result = await window.eplusApi.importHarvest({ payload });
+    setHarvestReport(result);
+    setMessage(`采集文件导入完成：${result.accountCreated ? "已新建账号" : "已匹配现有账号"}`);
+    setSelectedAccountId(result.accountId);
+    await refresh();
+  });
+
   let content: React.ReactNode;
-  switch (panel) { case "accounts": content = <AccountManagement accounts={state.accounts} form={accountForm} importKind={importKind} importText={importText} report={report} adding={pending.has("addAccount")} importing={pending.has("importAccounts")} onFormChange={setAccountForm} onImportKindChange={setImportKind} onImportTextChange={setImportText} onAdd={addAccount} onImport={importAccounts} onSelect={setSelectedAccountId} onDelete={(id) => runAction(async () => { await window.eplusApi.deleteAccount(id); await refresh(); })} />; break; case "events": content = <EventDiscovery form={eventForm} schema={eventSchema} events={state.events} parsing={parsing} saving={pending.has("saveEvent")} onFormChange={setEventForm} onDiscover={discoverEvent} onSave={saveEvent} onDeleteEvent={deleteEvent} />; break; case "tasks": content = <TaskCreation events={state.events} accounts={state.accounts} form={taskForm} selectedEvent={selectedEvent} creating={pending.has("createTask")} onFormChange={setTaskForm} onCreate={createTask} />; break; case "monitor": content = <TaskMonitor state={state} onEnqueue={(id) => runAction(async () => { await window.eplusApi.enqueueTask(id); await refresh(); })} onPause={() => runAction(async () => { await window.eplusApi.pauseQueue(); await refresh(); })} onResume={() => runAction(async () => { await window.eplusApi.resumeQueue(); await refresh(); })} onCancelTask={(id) => runAction(async () => { await window.eplusApi.cancelTask(id); await refresh(); })} onDeleteTask={deleteTask} onCancelRun={(id) => runAction(async () => { await window.eplusApi.cancelRun(id); await refresh(); })} onManualAction={manualAction} onSelectPayment={selectPayment} onConfirmSubmit={confirmSubmit} onAwaitCompletionEmail={awaitCompletionEmail} onRetryEmailCode={retryEmailCode} onOpenNetworkSettings={() => setPanel("network")} />; break; case "mailbox": content = <MailboxSettings form={mailboxForm} settings={state.verificationMailbox} readResult={mailboxReadResult} reading={mailboxReading} saving={pending.has("saveMailbox")} testing={pending.has("testMailbox")} onFormChange={setMailboxForm} onSave={saveMailbox} onTest={testMailbox} onRead={readMailbox} />; break; case "network": content = <NetworkSettingsPanel initial={state.network} onSaved={(network) => setState((current) => ({ ...current, network }))} onMessage={setMessage} />; break; case "logs": content = <LogViewer logs={state.logs} />; break; }
-  return <div className="app-shell"><header className="topbar"><div><p className="eyebrow">Eplus 抽选工作台</p><h1>本地抽选工作台</h1></div><div className="topbar-actions"><ThemeToggle /><button className="icon-button" onClick={() => { void refresh(); }} title="重新读取本地工作台数据"><RefreshCw size={16} />刷新</button><button className="icon-button" onClick={() => { void window.eplusApi.openDataFolder(); }} title="打开本地数据目录"><FolderOpen size={16} />数据目录</button></div></header><div className="workbench"><Sidebar activePanel={panel} onPanelChange={setPanel} /><main className="workspace" id="main-content"><StatusBanner message={message} onDismiss={() => setMessage("")} />{content}{selectedAccountId ? <AccountDetail account={state.accounts.find((account) => account.id === selectedAccountId)} onClose={() => setSelectedAccountId(undefined)} onMessage={setMessage} /> : null}</main></div><footer className="status-bar"><span><UsersRound size={14} />账号 {state.accounts.length}</span><span><Tickets size={14} />快照 {state.events.length}</span><span><ShieldCheck size={14} />任务 {state.tasks.length}</span><span>本机加密存储</span></footer></div>;
+  switch (panel) {
+    case "accounts":
+      content = <AccountManagement
+        accounts={state.accounts}
+        form={accountForm}
+        importKind={importKind}
+        importText={importText}
+        report={report}
+        harvestReport={harvestReport}
+        adding={pending.has("addAccount")}
+        importing={pending.has("importAccounts")}
+        importingHarvest={pending.has("importHarvest")}
+        onFormChange={setAccountForm}
+        onImportKindChange={setImportKind}
+        onImportTextChange={setImportText}
+        onAdd={addAccount}
+        onImport={importAccounts}
+        onImportHarvestText={importHarvestText}
+        onSelect={setSelectedAccountId}
+        onDelete={(id) => runAction(async () => { await window.eplusApi.deleteAccount(id); await refresh(); })}
+      />;
+      break;
+    case "logs":
+      content = <LogViewer logs={state.logs} />;
+      break;
+  }
+
+  return <div className="app-shell">
+    <header className="topbar">
+      <div><p className="eyebrow">Eplus 账号管理器</p><h1>本地账号管理器</h1></div>
+      <div className="topbar-actions">
+        <ThemeToggle />
+        <button className="icon-button" onClick={() => { void refresh(); }} title="重新读取本地数据"><RefreshCw size={16} />刷新</button>
+        <button className="icon-button" onClick={() => { void window.eplusApi.openDataFolder(); }} title="打开本地数据目录"><FolderOpen size={16} />数据目录</button>
+      </div>
+    </header>
+    <div className="workbench">
+      <Sidebar activePanel={panel} onPanelChange={setPanel} />
+      <main className="workspace" id="main-content">
+        <StatusBanner message={message} onDismiss={() => setMessage("")} />
+        {content}
+        {selectedAccountId ? <AccountDetail account={state.accounts.find((account) => account.id === selectedAccountId)} onClose={() => setSelectedAccountId(undefined)} onMessage={setMessage} /> : null}
+      </main>
+    </div>
+    <footer className="status-bar">
+      <span><UsersRound size={14} />账号 {state.accounts.length}</span>
+      <span><ShieldCheck size={14} />本机加密存储</span>
+    </footer>
+  </div>;
 }

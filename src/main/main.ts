@@ -4,8 +4,6 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { AppDatabase } from "./storage/database.js";
 import { SecretStore } from "./storage/secretStore.js";
 import { registerIpc } from "./ipc.js";
-import { SubmissionGuard } from "./services/submissionGuard.js";
-import { recoverSubmittingRuns } from "./services/lotteryOrchestrator.js";
 import { loadLocalEnv } from "./runtimeConfig.js";
 type ElectronBrowserWindow = InstanceType<typeof BrowserWindow>;
 
@@ -132,7 +130,6 @@ async function getServices(): Promise<{ db: AppDatabase; secretStore: SecretStor
     }
     const db = new AppDatabase(dataDir);
     await db.open();
-    recoverSubmittingRuns(db, new SubmissionGuard(db, "pending-device-registry-digest"));
     return { db, secretStore: new SecretStore() };
   })();
   return servicesPromise;

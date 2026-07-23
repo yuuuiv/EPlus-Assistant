@@ -14,6 +14,10 @@ artifacts/
 .env
 sp.gesicht.eplus.jp.har
 
+# Real member-page captures used to design the userscript's selectors - contains a real
+# phone number, name, address, masked card, and companion emails.
+sample/
+
 # Local automation/cache files
 .codegraph/
 .opencode/

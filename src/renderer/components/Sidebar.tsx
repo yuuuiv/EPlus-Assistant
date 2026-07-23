@@ -1,9 +1,8 @@
-import { Activity, BookOpenText, MailCheck, Network, ScrollText, Settings2, Tickets, UsersRound } from "lucide-react";
+import { ScrollText, Settings2, UsersRound } from "lucide-react";
 
 const navigationGroups = [
   { label: "账号管理", items: [{ id: "accounts", label: "账号列表", icon: UsersRound }] },
-  { label: "演出与任务", items: [{ id: "events", label: "演出快照", icon: Tickets }, { id: "tasks", label: "创建任务", icon: BookOpenText }, { id: "monitor", label: "任务监控", icon: Activity }] },
-  { label: "设置", items: [{ id: "mailbox", label: "邮箱验证码", icon: MailCheck }, { id: "network", label: "网络设置", icon: Network }, { id: "logs", label: "日志", icon: ScrollText }] }
+  { label: "设置", items: [{ id: "logs", label: "日志", icon: ScrollText }] }
 ] as const;
 
 export type PanelId = (typeof navigationGroups)[number]["items"][number]["id"];

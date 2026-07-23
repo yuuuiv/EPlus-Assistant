@@ -20,7 +20,7 @@ vi.mock("electron", () => ({
   session: { defaultSession: { webRequest: { onHeadersReceived: vi.fn() } } }
 }));
 
-import { contentSecurityPolicy, createWindow, isTrustedNavigation, sanitizeRuntimeDetail } from "../../src/main/main.js";
+import { contentSecurityPolicy, createWindow, isTrustedNavigation, sanitizeRuntimeDetail } from "./main.js";
 
 describe("Electron Security", () => {
   it("creates a BrowserWindow with renderer isolation and sandboxing", () => {
