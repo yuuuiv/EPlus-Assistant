@@ -14,7 +14,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      # electron's postinstall and electron-builder both download large binaries straight from
+      # github.com/electron/electron/releases and electron-builder's own release CDN - both have
+      # been observed to 504 on GitHub-hosted runners. Caching means a later run (or a retry
+      # within the same run) doesn't need that download to succeed again at all.
+      - name: Cache Electron/electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json') }}
+      - name: npm ci (retries transient download failures)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $attempt/3) - retrying in 20s..."
+            sleep 20
+          done
+          exit 1
       - run: npm run dist:win
       - uses: actions/upload-artifact@v4
         with:
@@ -31,7 +50,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - name: Cache Electron/electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json') }}
+      - name: npm ci (retries transient download failures)
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $attempt/3) - retrying in 20s..."
+            sleep 20
+          done
+          exit 1
       - run: npm run dist:mac
         env:
           # No Apple Developer ID certificate is configured, so this is an unsigned/ad-hoc
