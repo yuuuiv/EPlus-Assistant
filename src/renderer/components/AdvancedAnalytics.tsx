@@ -139,15 +139,17 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
     <section className="panel-card">
       <div className="panel-head"><h2><Coins size={16} />投入产出比</h2><div className="actions"><InvestmentGranularityToggle value={investmentGranularity} onChange={setInvestmentGranularity} /><button className="icon-button" onClick={() => void exportChart(investmentChartRef, "投入产出比")}><ImageDown size={14} />导出图片</button></div></div>
       <p className="muted">条形长度 = 中选次数 / 投入抽选份数；悬停条形查看"中选数/投入数"原始值；已过滤掉投入不足 3 份的系列/场次，避免样本太薄的噪音。</p>
-      <RankedBarChart
-        ref={investmentChartRef}
-        items={investmentRankedItems}
-        trackColor={colors.surfaceC}
-        labelColor={colors.textMuted}
-        valueColor={colors.text}
-        maxValue={100}
-        barColor={colors.chart2}
-      />
+      <div key={investmentGranularity} className="chart-swap">
+        <RankedBarChart
+          ref={investmentChartRef}
+          items={investmentRankedItems}
+          trackColor={colors.surfaceC}
+          labelColor={colors.textMuted}
+          valueColor={colors.text}
+          maxValue={100}
+          barColor={colors.chart2}
+        />
+      </div>
     </section>
 
     <section className="panel-card">
