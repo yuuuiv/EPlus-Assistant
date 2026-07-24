@@ -9,6 +9,7 @@ import type {
   PerformanceHistory,
   TopPerformanceEntry
 } from "../../shared/types.js";
+import { buildAdvancedStats } from "./analyticsService.js";
 
 const RECENT_ACTIVITY_LIMIT = 8;
 const TOP_PERFORMANCES_LIMIT = 5;
@@ -23,8 +24,9 @@ export function classifyOutcome(status: string): LotteryOutcome {
 
 /** Groups by tour + event date/time so a two-day tour's two days count as two performances,
  *  while repeat/extra lottery applications for the same day merge into one performance. Falls
- *  back to reception/venue name when a record has no event date/time to key on. */
-function performanceKey(record: LotteryRecord): string {
+ *  back to reception/venue name when a record has no event date/time to key on. Exported so
+ *  analyticsService.ts groups performances the same way instead of re-deriving the definition. */
+export function performanceKey(record: LotteryRecord): string {
   return `${record.tourName}||${record.eventDatetime || record.receptionName || record.venueName || ""}`;
 }
 
@@ -145,6 +147,7 @@ export function buildAccountsOverview(
     recordOutcomeBreakdown,
     recentActivity,
     topPerformances: buildTopPerformances(records),
-    accounts: entries
+    accounts: entries,
+    advanced: buildAdvancedStats(entries, records)
   };
 }

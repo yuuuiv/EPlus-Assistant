@@ -93,6 +93,17 @@ The **账号总览** (overview) page aggregates every account: total accounts, c
 
 Export the whole table to CSV from the button at the top of the page.
 
+## Dig into strategy-level analytics
+
+The **深度分析** (analytics) page goes past the basic overview into questions about how to actually run the tool:
+
+- Monthly application volume and win-rate trend, bucketed by each show's date
+- How the odds of at least one account winning a performance change as more accounts draw for it (observational, not a controlled experiment — accounts piling onto a performance may just mean it's popular)
+- A dose-response curve for how re-applying to the same performance multiple times affects the odds
+- A win-rate ranking re-scored with a Wilson confidence interval, so an account with one lucky draw doesn't outrank one with a long, genuinely strong track record
+- Investment-return rankings (wins ÷ entries spent) at both the tour-series and single-performance level, filtered to series/performances with at least 3 entries
+- A demand-vs-difficulty scatter plot, so a heavily-contested performance and a genuinely hard one can be told apart
+
 ## Repository layout
 
 | Path | What's there |

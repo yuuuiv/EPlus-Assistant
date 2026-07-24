@@ -5,6 +5,7 @@ import type { AccountsOverview, DashboardState } from "../shared/ipc.js";
 import { AccountDetail } from "./components/AccountDetail.js";
 import { AccountManagement } from "./components/AccountManagement.js";
 import { AccountOverview } from "./components/AccountOverview.js";
+import { AdvancedAnalytics } from "./components/AdvancedAnalytics.js";
 import { LogViewer } from "./components/LogViewer.js";
 import { Modal } from "./components/Modal.js";
 import { Sidebar, type PanelId } from "./components/Sidebar.js";
@@ -88,6 +89,9 @@ export function App() {
       break;
     case "overview":
       content = <AccountOverview overview={overview} loading={overviewLoading} />;
+      break;
+    case "analytics":
+      content = <AdvancedAnalytics overview={overview} loading={overviewLoading} />;
       break;
     case "logs":
       content = <LogViewer logs={state.logs} />;

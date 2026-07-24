@@ -1,9 +1,10 @@
-import { PieChart, ScrollText, Settings2, UsersRound } from "lucide-react";
+import { PieChart, ScrollText, Settings2, TrendingUp, UsersRound } from "lucide-react";
 
 const navigationGroups = [
   { label: "账号管理", items: [
     { id: "accounts", label: "账号列表", icon: UsersRound },
-    { id: "overview", label: "账号总览", icon: PieChart }
+    { id: "overview", label: "账号总览", icon: PieChart },
+    { id: "analytics", label: "深度分析", icon: TrendingUp }
   ] },
   { label: "设置", items: [{ id: "logs", label: "日志", icon: ScrollText }] }
 ] as const;

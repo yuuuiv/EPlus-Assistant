@@ -221,4 +221,75 @@ export interface AccountsOverview {
   /** Performances drawn for the most, across every account, most-drawn first. */
   topPerformances: TopPerformanceEntry[];
   accounts: AccountOverviewEntry[];
+  advanced: AdvancedStats;
+}
+
+/** One calendar month's worth of lottery applications, bucketed by event_datetime (when the
+ *  show itself happens) - order_datetime would more directly reflect application activity, but
+ *  the collector doesn't reliably capture it, so event month is used instead. */
+export interface MonthlyTrendPoint {
+  /** "YYYY-MM". */
+  month: string;
+  applications: number;
+  won: number;
+  lost: number;
+  /** won / (won + lost); pending records don't count toward either side. Null with no decided
+   *  outcome yet that month. */
+  winRate: number | null;
+}
+
+/** One bucket of an ordered dose-response curve (e.g. "applied N times" or "N accounts drew") -
+ *  the bucket order is meaningful and set by the caller, not by sorting on value. */
+export interface BucketRatePoint {
+  bucketLabel: string;
+  sampleSize: number;
+  successRate: number | null;
+}
+
+/** An account's win rate re-ranked by a Wilson score interval lower bound instead of the raw
+ *  ratio, so an account with one lucky draw doesn't outrank one with a long, genuinely strong
+ *  track record - see analyticsService.ts's wilsonLowerBound. */
+export interface ConfidenceRankedEntry {
+  accountId: string;
+  label: string;
+  trials: number;
+  rawWinRate: number | null;
+  adjustedScore: number | null;
+}
+
+/** How many lottery entries went into a tour series (or a single performance) versus how many
+ *  of them actually won - an efficiency view rather than a simple popularity count. */
+export interface InvestmentReturnEntry {
+  key: string;
+  label: string;
+  /** Only set for the per-performance grouping, not the per-tour-series one. */
+  eventDatetime?: string;
+  totalDraws: number;
+  wonCount: number;
+  accountCount: number;
+  efficiency: number | null;
+}
+
+/** One performance's demand (how many accounts drew for it) plotted against how favorable the
+ *  odds actually were for the accounts that did - lets "hyped" and "genuinely hard" be told apart. */
+export interface PerformanceHeatPoint {
+  performanceKey: string;
+  tourName: string;
+  eventDatetime?: string;
+  totalDraws: number;
+  accountCount: number;
+  /** Distinct accounts that won at least once for this performance, divided by accountCount. */
+  participantWinRate: number | null;
+}
+
+export interface AdvancedStats {
+  monthlyTrend: MonthlyTrendPoint[];
+  /** Bucketed by how many distinct accounts drew for the same performance. */
+  accountCountCurve: BucketRatePoint[];
+  /** Bucketed by how many times one account re-applied to the same performance. */
+  stackCountCurve: BucketRatePoint[];
+  confidenceRanking: ConfidenceRankedEntry[];
+  tourInvestmentReturn: InvestmentReturnEntry[];
+  performanceInvestmentReturn: InvestmentReturnEntry[];
+  heatDifficulty: PerformanceHeatPoint[];
 }

@@ -165,7 +165,13 @@ export interface RankedItem {
   readonly key: string;
   readonly label: string;
   readonly value: number;
+  /** Rendered both beside the bar and in its tooltip - keep this short (it has roughly a
+   *  60-unit-wide column to sit in before it runs into the viewBox edge). Use `detail` for
+   *  anything that needs more room; it only appears on hover. */
   readonly displayValue: string;
+  /** Extra tooltip-only context (e.g. the raw counts behind a percentage) that wouldn't fit
+   *  next to the bar. */
+  readonly detail?: string;
 }
 
 export interface RankedBarHeat {
@@ -234,7 +240,7 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
           </text>
           <rect x={labelWidth} y={y + 5} width={trackWidth} height={rowHeight - 10} rx={4} fill={props.trackColor} />
           <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.heat ? heatFill(item.value, max, props.heat) : props.barColor}>
-            <title>{`${item.label}：${item.displayValue}`}</title>
+            <title>{`${item.label}：${item.displayValue}${item.detail ? `（${item.detail}）` : ""}`}</title>
           </rect>
           <text x={labelWidth + trackWidth + 10} y={y + rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>{item.displayValue}</text>
         </g>;
@@ -242,3 +248,236 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
   </svg>;
 });
 RankedBarChart.displayName = "RankedBarChart";
+
+export interface TrendPoint {
+  readonly x: string;
+  /** Already scaled to 0-100 by the caller - lets series with different natural units (a raw
+   *  count, a percent) share one y-axis. The real number belongs in displayValue instead. */
+  readonly y: number | null;
+  readonly displayValue: string;
+}
+
+export interface TrendSeries {
+  readonly key: string;
+  readonly label: string;
+  readonly color: string;
+  readonly points: readonly TrendPoint[];
+}
+
+interface TrendChartProps {
+  readonly series: readonly TrendSeries[];
+  readonly gridColor: string;
+  readonly labelColor: string;
+  readonly textColor: string;
+  readonly mutedColor: string;
+}
+
+/** Multi-line trend over a shared category axis (e.g. months). A null y leaves a gap in that
+ *  series' line rather than interpolating across missing data. */
+export const TrendChart = forwardRef<SVGSVGElement, TrendChartProps>((props, ref) => {
+  const width = 1040;
+  const marginLeft = 34;
+  const marginRight = 16;
+  // Room above the 100-mark gridline for its label's ascent and the top row of markers (r=4) -
+  // without it, both get clipped flush against the viewBox's top edge.
+  const topPadding = 12;
+  const plotHeight = 220;
+  const labelRowHeight = 28;
+  const legendRowHeight = 22;
+  const plotWidth = width - marginLeft - marginRight;
+  const categories = props.series[0]?.points.map((point) => point.x) ?? [];
+  const n = categories.length;
+
+  if (n === 0) {
+    return <svg ref={ref} viewBox={`0 0 ${width} ${plotHeight}`} className="chart-svg" role="img" aria-label="趋势图">
+      <text x={0} y={plotHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
+    </svg>;
+  }
+
+  const height = topPadding + plotHeight + labelRowHeight + Math.max(props.series.length, 1) * legendRowHeight + 16;
+  const xStep = n > 1 ? plotWidth / (n - 1) : 0;
+  const xAt = (index: number) => marginLeft + (n > 1 ? index * xStep : plotWidth / 2);
+  const yAt = (value: number) => topPadding + plotHeight - (Math.max(0, Math.min(100, value)) / 100) * plotHeight;
+  const labelStride = Math.max(1, Math.ceil(n / 10));
+
+  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="趋势图">
+    {[0, 50, 100].map((tick) => <g key={tick}>
+      <line x1={marginLeft} x2={width - marginRight} y1={yAt(tick)} y2={yAt(tick)} stroke={props.gridColor} strokeWidth={1} />
+      <text x={marginLeft - 6} y={yAt(tick) + 4} textAnchor="end" fontFamily={FONT} fontSize={10.5} fill={props.mutedColor}>{tick}</text>
+    </g>)}
+    {categories.map((label, index) => index % labelStride === 0
+      ? <text key={`${label}-${index}`} x={xAt(index)} y={topPadding + plotHeight + 20} textAnchor="middle" fontFamily={FONT} fontSize={11.5} fill={props.mutedColor}>{label}</text>
+      : null)}
+    {props.series.map((series) => {
+      const runs: { x: number; y: number }[][] = [];
+      let current: { x: number; y: number }[] = [];
+      series.points.forEach((point, index) => {
+        if (point.y === null) {
+          if (current.length > 0) runs.push(current);
+          current = [];
+          return;
+        }
+        current.push({ x: xAt(index), y: yAt(point.y) });
+      });
+      if (current.length > 0) runs.push(current);
+      return <g key={series.key}>
+        {runs.map((run, runIndex) => run.length > 1
+          ? <polyline key={runIndex} points={run.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={series.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          : null)}
+        {series.points.map((point, index) => point.y === null ? null : <circle key={index} cx={xAt(index)} cy={yAt(point.y)} r={4} fill={series.color}>
+          <title>{`${series.label} · ${categories[index]}：${point.displayValue}`}</title>
+        </circle>)}
+      </g>;
+    })}
+    <g transform={`translate(0, ${topPadding + plotHeight + labelRowHeight})`}>
+      {props.series.map((series, index) => <g key={series.key} transform={`translate(0, ${index * legendRowHeight})`}>
+        <rect x={0} y={4} width={13} height={13} rx={3} fill={series.color} />
+        <text x={21} y={14} fontFamily={FONT} fontSize={13} fill={props.textColor}>{series.label}</text>
+      </g>)}
+    </g>
+  </svg>;
+});
+TrendChart.displayName = "TrendChart";
+
+export interface CurveBarPoint {
+  readonly key: string;
+  /** Bucket label (e.g. "1个", "6+个") - buckets render in the order given, not sorted by value,
+   *  since the order along a dose-response curve is the point. */
+  readonly label: string;
+  readonly value: number | null;
+  readonly sampleSize: number;
+  readonly displayValue: string;
+}
+
+interface CurveBarChartProps {
+  readonly points: readonly CurveBarPoint[];
+  readonly trackColor: string;
+  readonly labelColor: string;
+  readonly valueColor: string;
+  readonly mutedColor: string;
+  readonly heat?: RankedBarHeat;
+}
+
+/** Ordered dose-response curve as vertical bars (bucket count on X, a 0-100 rate on Y), each
+ *  bar labeled with its sample size so a thin bucket doesn't read as equally trustworthy as a
+ *  thick one. Reuses RankedBarChart's diverging heat fill for the same warm/cool language. */
+export const CurveBarChart = forwardRef<SVGSVGElement, CurveBarChartProps>((props, ref) => {
+  const width = 1040;
+  const marginLeft = 16;
+  const marginRight = 16;
+  const plotHeight = 200;
+  const labelRowHeight = 40;
+  const valueLabelHeight = 20;
+  const plotWidth = width - marginLeft - marginRight;
+  const n = props.points.length;
+
+  if (n === 0) {
+    return <svg ref={ref} viewBox={`0 0 ${width} ${plotHeight}`} className="chart-svg" role="img" aria-label="量效曲线">
+      <text x={0} y={plotHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
+    </svg>;
+  }
+
+  const height = plotHeight + labelRowHeight + valueLabelHeight + 8;
+  // Bars stay thin and centered in their slot even when there are few buckets - the slot's
+  // leftover width is air, not more bar (mark spec: bars cap at 24px thick).
+  const slotWidth = plotWidth / n;
+  const barWidth = Math.min(24, Math.max(8, slotWidth - 16));
+  const startX = (index: number) => marginLeft + index * slotWidth + (slotWidth - barWidth) / 2;
+
+  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="量效曲线">
+    {props.points.map((point, index) => {
+      const x = startX(index);
+      const value = point.value ?? 0;
+      const barHeight = point.value === null ? 0 : Math.max((value / 100) * plotHeight, value > 0 ? 3 : 0);
+      const y = valueLabelHeight + plotHeight - barHeight;
+      const fill = point.value === null ? props.trackColor : (props.heat ? heatFill(value, 100, props.heat) : props.trackColor);
+      return <g key={point.key}>
+        {/* Track spans the full slot height (not just the filled bar) so hovering anywhere in a
+           thin/near-zero bar's column still surfaces its tooltip. */}
+        <rect x={x} y={valueLabelHeight} width={barWidth} height={plotHeight} rx={4} fill={props.trackColor}>
+          <title>{`${point.label}：${point.displayValue}（n=${point.sampleSize}）`}</title>
+        </rect>
+        <rect x={x} y={y} width={barWidth} height={barHeight} rx={4} fill={fill} pointerEvents="none" />
+        <text x={x + barWidth / 2} y={y - 6} textAnchor="middle" fontFamily={FONT} fontSize={12.5} fontWeight={600} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>{point.displayValue}</text>
+        <text x={x + barWidth / 2} y={valueLabelHeight + plotHeight + 18} textAnchor="middle" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>{point.label}</text>
+        <text x={x + barWidth / 2} y={valueLabelHeight + plotHeight + 34} textAnchor="middle" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>n={point.sampleSize}</text>
+      </g>;
+    })}
+  </svg>;
+});
+CurveBarChart.displayName = "CurveBarChart";
+
+export interface ScatterPoint {
+  readonly key: string;
+  readonly x: number;
+  /** 0-100. */
+  readonly y: number;
+  readonly label: string;
+  readonly displayValue: string;
+}
+
+interface ScatterChartProps {
+  readonly points: readonly ScatterPoint[];
+  readonly xLabel: string;
+  readonly yLabel: string;
+  readonly pointColor: string;
+  /** Surface-color ring around each dot, so overlapping points stay distinguishable. */
+  readonly ringColor: string;
+  readonly gridColor: string;
+  readonly labelColor: string;
+  readonly mutedColor: string;
+}
+
+/** Linear X/Y scatter - X is whatever scale the caller passes (e.g. a raw demand count), Y is
+ *  always a 0-100 rate. Each point's real values surface through its tooltip. */
+export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props, ref) => {
+  const width = 1040;
+  const marginLeft = 50;
+  const marginRight = 20;
+  // A reserved band above the plot for the Y-axis caption, so it doesn't collide with the
+  // "100%" gridline label sitting right at the plot's top edge.
+  const yLabelBand = 22;
+  const marginTop = 10 + yLabelBand;
+  const plotHeight = 280;
+  const axisLabelHeight = 34;
+  const plotWidth = width - marginLeft - marginRight;
+
+  if (props.points.length === 0) {
+    return <svg ref={ref} viewBox={`0 0 ${width} ${plotHeight}`} className="chart-svg" role="img" aria-label="散点图">
+      <text x={0} y={plotHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
+    </svg>;
+  }
+
+  const height = marginTop + plotHeight + axisLabelHeight + 20;
+  const maxX = Math.max(1, ...props.points.map((point) => point.x));
+  const xAt = (value: number) => marginLeft + (value / maxX) * plotWidth;
+  const yAt = (value: number) => marginTop + plotHeight - (Math.max(0, Math.min(100, value)) / 100) * plotHeight;
+  const yTicks = [0, 25, 50, 75, 100];
+  const xTickCount = 5;
+
+  return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="散点图">
+    {yTicks.map((tick) => <g key={tick}>
+      <line x1={marginLeft} x2={width - marginRight} y1={yAt(tick)} y2={yAt(tick)} stroke={props.gridColor} strokeWidth={1} />
+      <text x={marginLeft - 8} y={yAt(tick) + 4} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{tick}%</text>
+    </g>)}
+    {Array.from({ length: xTickCount + 1 }, (_, index) => {
+      const value = Math.round((maxX / xTickCount) * index);
+      return <text key={index} x={xAt(value)} y={marginTop + plotHeight + 18} textAnchor="middle" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{value}</text>;
+    })}
+    {props.points.map((point) => {
+      const cx = xAt(point.x);
+      const cy = yAt(point.y);
+      return <g key={point.key}>
+        {/* Invisible but hit-testable - a 5px dot is a pinpoint target, so the actual hover/
+           focus area is a generous 24px circle around it, per the interaction spec. */}
+        <circle cx={cx} cy={cy} r={12} fill="transparent" style={{ pointerEvents: "all" }}>
+          <title>{`${point.label}：${point.displayValue}`}</title>
+        </circle>
+        <circle cx={cx} cy={cy} r={5} fill={props.pointColor} fillOpacity={0.85} stroke={props.ringColor} strokeWidth={2} pointerEvents="none" />
+      </g>;
+    })}
+    <text x={marginLeft + plotWidth / 2} y={height - 4} textAnchor="middle" fontFamily={FONT} fontSize={12} fill={props.labelColor}>{props.xLabel}</text>
+    <text x={marginLeft} y={16} fontFamily={FONT} fontSize={12} fill={props.labelColor}>{props.yLabel}</text>
+  </svg>;
+});
+ScatterChart.displayName = "ScatterChart";
