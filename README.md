@@ -87,7 +87,7 @@ Open an account's **详情** (details) to see its profile — name with furigana
 The **账号总览** (overview) page aggregates every account: total accounts, cumulative wins, distinct performances drawn for, and overall win rate, plus:
 
 - Gender and outcome breakdowns, switchable between a segmented bar and a donut chart
-- A win-rate ranking across accounts
+- A win-rate ranking across accounts, colored on a diverging scale centered on 50% (warmer above half, cooler below) so it also shows how far above or below the middle each account sits, not just its rank
 - Recent lottery activity and the most-contested performances
 - A sortable, filterable table of every account's stats, with a per-account modal listing every performance it's drawn for
 

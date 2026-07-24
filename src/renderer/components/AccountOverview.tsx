@@ -53,7 +53,7 @@ export function AccountOverview(props: AccountOverviewProps) {
   const accountLabelById = new Map(overview.accounts.map((entry) => [entry.account.id, entry.account.label || entry.account.eplusEmail]));
 
   const genderEntries = Object.entries(overview.genderBreakdown).sort(([a], [b]) => (a === "未知" ? 1 : b === "未知" ? -1 : 0));
-  const genderPalette = [colors.primary, colors.info, colors.warning, colors.success];
+  const genderPalette = [colors.chart1, colors.chart2, colors.chart3, colors.chart4];
   let genderColorIndex = 0;
   const genderSegments: Segment[] = genderEntries.map(([gender, count]) => ({
     key: gender,
@@ -148,7 +148,16 @@ export function AccountOverview(props: AccountOverviewProps) {
 
     <section className="panel-card">
       <div className="panel-head"><h2><PercentCircle size={16} />中率排行榜</h2><button className="icon-button" onClick={() => void exportChart(winRateChartRef, "中率排行榜")}><ImageDown size={14} />导出图片</button></div>
-      <RankedBarChart ref={winRateChartRef} items={winRateItems} barColor={colors.primary} trackColor={colors.surfaceC} labelColor={colors.textMuted} valueColor={colors.text} maxValue={100} />
+      <p className="muted">条形长度按中率排名；颜色按高于/低于 50% 中率深浅渐变，越暖代表越高于五成，越冷代表越低于五成。</p>
+      <RankedBarChart
+        ref={winRateChartRef}
+        items={winRateItems}
+        trackColor={colors.surfaceC}
+        labelColor={colors.textMuted}
+        valueColor={colors.text}
+        maxValue={100}
+        heat={{ cool: colors.chart1, warm: colors.chart3, neutral: colors.textMuted, midpoint: 50 }}
+      />
     </section>
 
     <div className="panel-layout-two">

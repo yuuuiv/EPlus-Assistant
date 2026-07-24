@@ -168,17 +168,41 @@ export interface RankedItem {
   readonly displayValue: string;
 }
 
+export interface RankedBarHeat {
+  /** Below-midpoint anchor hue ("cold" - underperforming). */
+  readonly cool: string;
+  /** Above-midpoint anchor hue ("hot" - overperforming). */
+  readonly warm: string;
+  /** What a bar sitting exactly at the midpoint fades toward - a visible neutral, not the
+   *  track color, so a middling value still reads as a real (if quiet) bar. */
+  readonly neutral: string;
+  /** The value that's neither hot nor cold - e.g. 50 for a win rate, where the reader's
+   *  real question is "above or below half," not just "who's highest." */
+  readonly midpoint: number;
+}
+
 interface RankedBarChartProps {
   readonly items: readonly RankedItem[];
-  readonly barColor: string;
+  readonly barColor?: string;
   readonly trackColor: string;
   readonly labelColor: string;
   readonly valueColor: string;
   readonly maxValue?: number;
+  /** Recolors each bar by distance above/below `heat.midpoint` (a diverging encoding) instead
+   *  of a single flat barColor - rank still comes from bar length, this adds a second read
+   *  ("comfortably above half" vs "barely above half") that length alone can't show. */
+  readonly heat?: RankedBarHeat;
 }
 
 function truncateLabel(label: string): string {
   return label.length > 18 ? `${label.slice(0, 17)}…` : label;
+}
+
+function heatFill(value: number, max: number, heat: RankedBarHeat): string {
+  const span = Math.max(heat.midpoint, max - heat.midpoint) || 1;
+  const t = Math.max(-1, Math.min(1, (value - heat.midpoint) / span));
+  const pct = Math.round(Math.abs(t) * 100);
+  return `color-mix(in srgb, ${t >= 0 ? heat.warm : heat.cool} ${pct}%, ${heat.neutral})`;
 }
 
 /** Magnitude comparison across accounts/performances - single sequential hue, sorted by the
@@ -209,7 +233,7 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
             {truncateLabel(item.label)}
           </text>
           <rect x={labelWidth} y={y + 5} width={trackWidth} height={rowHeight - 10} rx={4} fill={props.trackColor} />
-          <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.barColor}>
+          <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.heat ? heatFill(item.value, max, props.heat) : props.barColor}>
             <title>{`${item.label}：${item.displayValue}`}</title>
           </rect>
           <text x={labelWidth + trackWidth + 10} y={y + rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>{item.displayValue}</text>

@@ -61,6 +61,16 @@
   --success:       #8aa399;
   --info:          #7d84b2;
 
+  /* Dedicated categorical set for chart series (gender/segment breakdowns) - separate from
+     the primary/info/warning/success UI tokens above, which read too close together as
+     adjacent chart segments. Chosen and verified with the dataviz skill's palette validator:
+     OKLCH lightness band, chroma floor, and CVD/normal-vision adjacent-pair separation all
+     pass for this surface. */
+  --chart-1: #5580c2;
+  --chart-2: #1fa583;
+  --chart-3: #c67909;
+  --chart-4: #9a6fd0;
+
   --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
   --shadow-md:  0 4px 16px rgba(0,0,0,0.5);
   --shadow-lg:  0 8px 40px rgba(0,0,0,0.6);
@@ -118,6 +128,12 @@
   --warning:       #617a29;
   --success:       #3d715c;
   --info:          #3c4686;
+
+  /* Same dedicated chart set as the dark theme, re-validated against the white surface. */
+  --chart-1: #2f65a8;
+  --chart-2: #06a77d;
+  --chart-3: #e0940a;
+  --chart-4: #8a5fc4;
 
   --shadow-sm:  0 1px 2px rgba(15,23,42,0.06);
   --shadow-md:  0 6px 20px rgba(15,23,42,0.08);

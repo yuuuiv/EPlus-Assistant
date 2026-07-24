@@ -21,7 +21,11 @@ export function useThemeColors() {
       textMuted: read("--text-muted", "#5b6472"),
       text: read("--text", "#1a2130"),
       surfaceC: read("--surface-c", "rgba(15,23,42,0.09)"),
-      surfaceSolid: read("--bg-surface-solid", "#ffffff")
+      surfaceSolid: read("--bg-surface-solid", "#ffffff"),
+      chart1: read("--chart-1", "#2f65a8"),
+      chart2: read("--chart-2", "#06a77d"),
+      chart3: read("--chart-3", "#e0940a"),
+      chart4: read("--chart-4", "#8a5fc4")
     };
   }, [mode]);
 }
