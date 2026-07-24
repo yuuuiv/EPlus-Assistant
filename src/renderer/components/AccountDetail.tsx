@@ -3,6 +3,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { Account, AccountProfile, LotteryRecord } from "../../shared/ipc.js";
 import { CopyButton } from "./CopyButton.js";
 import { formatDateTime, toHalfWidth } from "../format.js";
+import { SortableFilterableTable, type Column } from "./SortableFilterableTable.js";
+
+const recordColumns: Column<LotteryRecord>[] = [
+  { key: "tour", label: "演出", render: (record) => record.tourName, sortValue: (record) => record.tourName },
+  { key: "reception", label: "受付", render: (record) => record.receptionName || "-", sortValue: (record) => record.receptionName || "", noWrap: true },
+  { key: "orderDatetime", label: "申込时间", render: (record) => record.orderDatetime || record.eventDatetime || "-", sortValue: (record) => record.orderDatetime || record.eventDatetime || "", noWrap: true },
+  { key: "status", label: "状态", render: (record) => record.status, sortValue: (record) => record.status, noWrap: true },
+  { key: "detail", label: "说明", render: (record) => record.statusDetail || "-", sortValue: (record) => record.statusDetail || "" }
+];
 
 interface AccountDetailProps {
   readonly account: Account | undefined;
@@ -145,11 +154,7 @@ export function AccountDetail(props: AccountDetailProps) {
               </p>;
             }) : <p className="muted">暂无可用卡片摘要。卡号、CVV 和有效期不会保存。</p>}</div></article>
       </div>
-      <article className="detail-block"><div className="panel-head"><h3>抽选记录</h3></div><div className="filter-grid"><label>演出搜索<input value={recordQuery} onChange={(event) => setRecordQuery(event.target.value)} /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">全部状态</option>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></div><RecordTable records={filteredRecords} /></article>
+      <article className="detail-block"><div className="panel-head"><h3>抽选记录</h3></div><div className="filter-grid"><label>演出搜索<input value={recordQuery} onChange={(event) => setRecordQuery(event.target.value)} /></label><label>状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">全部状态</option>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></div><SortableFilterableTable columns={recordColumns} rows={filteredRecords} rowKey={(record) => record.id} emptyMessage="没有符合筛选条件的抽选记录。" /></article>
     </div>
   );
-}
-
-function RecordTable({ records }: { readonly records: readonly LotteryRecord[] }) {
-  return <div className="table-wrap"><table><thead><tr><th>演出</th><th>受付</th><th>申込时间</th><th className="th-nowrap">状态</th><th>说明</th></tr></thead><tbody>{records.map((record) => <tr key={record.id}><td>{record.tourName}</td><td className="td-nowrap">{record.receptionName || "-"}</td><td className="td-nowrap">{record.orderDatetime || record.eventDatetime || "-"}</td><td className="td-nowrap">{record.status}</td><td>{record.statusDetail || "-"}</td></tr>)}</tbody></table>{records.length === 0 ? <p className="empty-state">没有符合筛选条件的抽选记录。</p> : null}</div>;
 }

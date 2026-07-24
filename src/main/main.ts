@@ -11,7 +11,10 @@ let mainWindow: ElectronBrowserWindow | undefined;
 let servicesPromise: Promise<{ db: AppDatabase; secretStore: SecretStore }> | undefined;
 let ipcRegistered = false;
 
-export const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'";
+// img-src needs data: on top of 'self' - chart PNG export rasterizes a chart's <svg> by loading
+// it into an <img> as a data:image/svg+xml URL (see format.ts downloadSvgAsPng); without this,
+// that load is silently blocked by the default-src fallback and every chart export fails.
+export const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
 
 /** In dev, cwd is the project root (matches how `npm run dev`/`npm start` launch electron), so
  *  a project-local `data/` folder is the natural place. In a packaged app that folder would be

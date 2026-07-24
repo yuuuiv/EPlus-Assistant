@@ -152,6 +152,23 @@ export interface ImportHarvestResult {
   report: ImportReport;
 }
 
+export interface SaveExportInput {
+  /** Pre-fills the native save dialog's filename and location memory; the user can still
+   *  rename or pick a different folder before confirming. */
+  suggestedFileName: string;
+  data: string;
+  encoding: "base64" | "utf8";
+  /** Save-dialog file-type filter, e.g. name "PNG 图片", extensions ["png"]. */
+  filterName: string;
+  filterExtensions: string[];
+}
+
+export interface SaveExportResult {
+  canceled: boolean;
+  /** Absolute path the file was written to. Present iff canceled is false. */
+  filePath?: string;
+}
+
 export interface DashboardState {
   accounts: Account[];
   logs: AuditLog[];

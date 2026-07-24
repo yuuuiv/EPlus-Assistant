@@ -50,7 +50,7 @@ describe("Electron Security", () => {
     const indexHtml = await readFile(path.join(process.cwd(), "index.html"), "utf8");
     expect(indexHtml).toContain("http-equiv=\"Content-Security-Policy\"");
     expect(indexHtml).toContain("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;");
-    expect(contentSecurityPolicy).toBe("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+    expect(contentSecurityPolicy).toBe("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:");
   });
 
   it("redacts secret-like runtime details before persistence", () => {

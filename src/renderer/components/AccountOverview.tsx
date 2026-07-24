@@ -1,5 +1,5 @@
 import { BarChart3, Download, Flame, History, ImageDown, PercentCircle, PieChart, Ticket, Trophy, Users } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountOverviewEntry, AccountsOverview, LotteryOutcome, LotteryRecord, PerformanceHistory, TopPerformanceEntry } from "../../shared/ipc.js";
 import { csvCell, downloadSvgAsPng, downloadTextFile, formatDateTime, formatPercent } from "../format.js";
 import { useThemeColors } from "../useThemeColors.js";
@@ -33,14 +33,44 @@ function outcomeLabel(status: string, outcome: LotteryOutcome): string {
 
 const OUTCOME_LABEL: Record<LotteryOutcome, string> = { won: "当选", lost: "落选", pending: "其他/待定" };
 
+/** Matches how many records the cross-account feed already shows, so switching to a single
+ *  account doesn't suddenly show a much longer or shorter list. */
+const RECENT_ACTIVITY_DISPLAY_LIMIT = 8;
+
+/** Mirrors statsService.ts's private byRecency - can't import a main-process helper into the
+ *  renderer, so the same "order_datetime desc, falling back to string compare" rule is
+ *  duplicated here for the one place the renderer needs to re-sort records itself. */
+function compareByRecency(a: LotteryRecord, b: LotteryRecord): number {
+  const aTime = Date.parse(a.orderDatetime ?? "");
+  const bTime = Date.parse(b.orderDatetime ?? "");
+  if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
+  return (b.orderDatetime ?? "").localeCompare(a.orderDatetime ?? "");
+}
+
 export function AccountOverview(props: AccountOverviewProps) {
   const [modalAccount, setModalAccount] = useState<AccountOverviewEntry>();
   const [genderChartMode, setGenderChartMode] = useState<SegmentChartMode>("bar");
   const [outcomeChartMode, setOutcomeChartMode] = useState<SegmentChartMode>("bar");
+  const [recentActivityAccountId, setRecentActivityAccountId] = useState("all");
+  const [accountRecentRecords, setAccountRecentRecords] = useState<LotteryRecord[]>();
   const colors = useThemeColors();
   const genderChartRef = useRef<SVGSVGElement>(null);
   const outcomeChartRef = useRef<SVGSVGElement>(null);
   const winRateChartRef = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    if (recentActivityAccountId === "all") {
+      setAccountRecentRecords(undefined);
+      return;
+    }
+    let active = true;
+    setAccountRecentRecords(undefined);
+    void window.eplusApi.listLotteryRecords(recentActivityAccountId).then((records) => {
+      if (!active) return;
+      setAccountRecentRecords([...records].sort(compareByRecency).slice(0, RECENT_ACTIVITY_DISPLAY_LIMIT));
+    });
+    return () => { active = false; };
+  }, [recentActivityAccountId]);
 
   if (props.loading || !props.overview) {
     return <section className="workspace-panel" aria-labelledby="overview-title">
@@ -80,7 +110,7 @@ export function AccountOverview(props: AccountOverviewProps) {
     .sort((a, b) => b.value - a.value)
     .slice(0, 15);
 
-  function exportOverviewCsv(): void {
+  async function exportOverviewCsv(): Promise<void> {
     const header = ["账号", "邮箱", "性别", "中选次数", "抽过公演数", "中选公演数", "中率(%)", "资料最后更新"];
     const rows = overview.accounts.map((entry) => [
       entry.account.label,
@@ -93,7 +123,7 @@ export function AccountOverview(props: AccountOverviewProps) {
       entry.account.profileUpdatedAt ?? ""
     ]);
     const csv = [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
-    downloadTextFile(`eplus-账号总览-${new Date().toISOString().slice(0, 10)}.csv`, `﻿${csv}`, "text/csv;charset=utf-8");
+    await downloadTextFile(`eplus-账号总览-${new Date().toISOString().slice(0, 10)}.csv`, `﻿${csv}`, "CSV 文件", ["csv"]);
   }
 
   async function exportChart(ref: React.RefObject<SVGSVGElement | null>, name: string): Promise<void> {
@@ -115,7 +145,7 @@ export function AccountOverview(props: AccountOverviewProps) {
   return <section className="workspace-panel" aria-labelledby="overview-title">
     <div className="workspace-heading">
       <div><p className="section-kicker">账号总览</p><h1 id="overview-title">统计与中选情况</h1><p>中选次数按抽选记录条数统计；抽过的公演数与中率按不同公演去重（同一公演的两天算两场，同一公演的多次抽选记录只算一场）。</p></div>
-      <button className="icon-button" onClick={exportOverviewCsv}><Download size={15} />导出数据 CSV</button>
+      <button className="icon-button" onClick={() => void exportOverviewCsv()}><Download size={15} />导出数据 CSV</button>
     </div>
 
     <section className="panel-card stat-hero">
@@ -162,8 +192,20 @@ export function AccountOverview(props: AccountOverviewProps) {
 
     <div className="panel-layout-two">
       <section className="panel-card">
-        <div className="panel-head"><h2><History size={16} />最近抽选动态</h2></div>
-        <RecentActivityList records={overview.recentActivity} accountLabelById={accountLabelById} />
+        <div className="panel-head">
+          <h2><History size={16} />最近抽选动态</h2>
+          <div className="actions">
+            <select aria-label="按账号查看" style={{ width: "auto" }} value={recentActivityAccountId} onChange={(event) => setRecentActivityAccountId(event.target.value)}>
+              <option value="all">全部账号</option>
+              {overview.accounts.map((entry) => <option key={entry.account.id} value={entry.account.id}>{entry.account.label || entry.account.eplusEmail}</option>)}
+            </select>
+          </div>
+        </div>
+        <div key={recentActivityAccountId} className="chart-swap">
+          {recentActivityAccountId !== "all" && !accountRecentRecords
+            ? <p className="empty-state">正在加载…</p>
+            : <RecentActivityList records={recentActivityAccountId === "all" ? overview.recentActivity : (accountRecentRecords ?? [])} accountLabelById={accountLabelById} />}
+        </div>
       </section>
       <section className="panel-card">
         <div className="panel-head"><h2><Flame size={16} />最多人抽的公演</h2></div>

@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import type { AccountsOverview, InvestmentReturnEntry } from "../../shared/ipc.js";
 import { downloadSvgAsPng, formatPercent } from "../format.js";
 import { useThemeColors } from "../useThemeColors.js";
-import { CurveBarChart, RankedBarChart, ScatterChart, TrendChart, type CurveBarPoint, type RankedItem, type ScatterPoint, type TrendSeries } from "./Charts.js";
+import { CurveBarChart, RankedBarChart, ScatterChart, TrendChart, type CurveBarPoint, type RankedItem, type ScatterPoint } from "./Charts.js";
 
 interface AdvancedAnalyticsProps {
   readonly overview: AccountsOverview | undefined;
@@ -53,21 +53,16 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
     await downloadSvgAsPng(ref.current, `eplus-${name}-${new Date().toISOString().slice(0, 10)}.png`, colors.surfaceSolid);
   }
 
-  const maxApplications = Math.max(1, ...advanced.monthlyTrend.map((point) => point.applications));
-  const trendSeries: TrendSeries[] = [
-    {
-      key: "applications",
-      label: "申请量（相对当月最高值）",
-      color: colors.chart1,
-      points: advanced.monthlyTrend.map((point) => ({ x: point.month, y: (point.applications / maxApplications) * 100, displayValue: `${point.applications} 次申请` }))
-    },
-    {
-      key: "winRate",
-      label: "当选率（当选 / (当选+落选)）",
-      color: colors.chart3,
-      points: advanced.monthlyTrend.map((point) => ({ x: point.month, y: point.winRate === null ? null : point.winRate * 100, displayValue: formatPercent(point.winRate) }))
-    }
-  ];
+  const trendBar = {
+    label: "申请量（背景柱，相对高度）",
+    color: colors.chart1,
+    points: advanced.monthlyTrend.map((point) => ({ x: point.month, value: point.applications, displayValue: `${point.applications} 次申请` }))
+  };
+  const trendLine = {
+    label: "当选率（左侧坐标轴，当选 / (当选+落选)）",
+    color: colors.chart3,
+    points: advanced.monthlyTrend.map((point) => ({ x: point.month, y: point.winRate === null ? null : point.winRate * 100, displayValue: formatPercent(point.winRate) }))
+  };
 
   function toCurvePoints(points: typeof advanced.accountCountCurve): CurveBarPoint[] {
     return points.map((point) => ({
@@ -89,6 +84,10 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
   const investmentEntries = investmentGranularity === "tour" ? advanced.tourInvestmentReturn : advanced.performanceInvestmentReturn;
   const investmentRankedItems = investmentItems(investmentEntries, investmentGranularity);
 
+  const sortedTotalDraws = advanced.heatDifficulty.map((point) => point.totalDraws).sort((a, b) => a - b);
+  const medianTotalDraws = sortedTotalDraws.length === 0 ? 0 : sortedTotalDraws[Math.floor((sortedTotalDraws.length - 1) / 2)];
+  const topDemandKeys = new Set([...advanced.heatDifficulty].sort((a, b) => b.totalDraws - a.totalDraws).slice(0, 3).map((point) => point.performanceKey));
+
   const heatPoints: ScatterPoint[] = advanced.heatDifficulty
     .filter((point) => point.participantWinRate !== null)
     .map((point) => ({
@@ -96,7 +95,8 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
       x: point.totalDraws,
       y: Math.round((point.participantWinRate ?? 0) * 100),
       label: point.tourName,
-      displayValue: `${point.totalDraws} 次抽选 · ${point.accountCount} 个账号参与 · 参与账号中率 ${formatPercent(point.participantWinRate)}`
+      displayValue: `${point.totalDraws} 次抽选 · ${point.accountCount} 个账号参与 · 参与账号中率 ${formatPercent(point.participantWinRate)}`,
+      showLabel: topDemandKeys.has(point.performanceKey)
     }));
 
   return <section className="workspace-panel" aria-labelledby="analytics-title">
@@ -106,8 +106,8 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
 
     <section className="panel-card">
       <div className="panel-head"><h2><ChartLine size={16} />申请量与当选率月度趋势</h2><button className="icon-button" onClick={() => void exportChart(trendChartRef, "月度趋势")}><ImageDown size={14} />导出图片</button></div>
-      <p className="muted">按演出时间分月统计（申请时间字段暂未被采集端记录）；申请量按当月最高值归一化展示，悬停查看真实数值。</p>
-      <TrendChart ref={trendChartRef} series={trendSeries} gridColor={colors.surfaceC} labelColor={colors.textMuted} textColor={colors.text} mutedColor={colors.textMuted} />
+      <p className="muted">按演出时间分月统计（申请时间字段暂未被采集端记录）。纵轴的 0-100% 只描述当选率这条线；背景柱是申请量，柱高只按自身月度峰值做相对高度、不对应坐标轴刻度，真实次数悬停查看。</p>
+      <TrendChart ref={trendChartRef} bar={trendBar} line={trendLine} gridColor={colors.surfaceC} labelColor={colors.textMuted} textColor={colors.text} mutedColor={colors.textMuted} />
     </section>
 
     <section className="panel-card">
@@ -132,6 +132,7 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
         labelColor={colors.textMuted}
         valueColor={colors.text}
         maxValue={100}
+        labelWidth={320}
         heat={{ cool: colors.chart1, warm: colors.chart3, neutral: colors.textMuted, midpoint: 50 }}
       />
     </section>
@@ -147,6 +148,7 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
           labelColor={colors.textMuted}
           valueColor={colors.text}
           maxValue={100}
+          labelWidth={320}
           barColor={colors.chart2}
         />
       </div>
@@ -154,8 +156,20 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
 
     <section className="panel-card">
       <div className="panel-head"><h2><ChartScatter size={16} />热度-难度相关性</h2><button className="icon-button" onClick={() => void exportChart(heatChartRef, "热度难度相关性")}><ImageDown size={14} />导出图片</button></div>
-      <p className="muted">横轴是该场公演的总抽选份数（跨账号，代表热度），纵轴是参与账号里最终中过的比例（代表实际难度）。热度高但纵轴也不低的场次，说明"人多但没那么难中"。</p>
-      <ScatterChart ref={heatChartRef} points={heatPoints} xLabel="总抽选份数（热度）" yLabel="参与账号中率" pointColor={colors.chart4} ringColor={colors.surfaceSolid} gridColor={colors.surfaceC} labelColor={colors.textMuted} mutedColor={colors.textMuted} />
+      <p className="muted">横轴是该场公演的总抽选份数（跨账号，代表热度），纵轴是参与账号里最终中过的比例（代表实际难度）。虚线是热度中位数；标了名字的是热度最高的 3 场；四角的文字标出了"热门/冷门 × 好中/难中"这四个象限各自的含义。</p>
+      <ScatterChart
+        ref={heatChartRef}
+        points={heatPoints}
+        xLabel="总抽选份数（热度）"
+        yLabel="参与账号中率"
+        pointColor={colors.chart4}
+        ringColor={colors.surfaceSolid}
+        gridColor={colors.surfaceC}
+        labelColor={colors.textMuted}
+        mutedColor={colors.textMuted}
+        xReference={medianTotalDraws}
+        quadrantLabels={{ topRight: "热门 · 好中", topLeft: "冷门 · 好中", bottomRight: "热门 · 难中", bottomLeft: "冷门 · 难中" }}
+      />
     </section>
   </section>;
 }

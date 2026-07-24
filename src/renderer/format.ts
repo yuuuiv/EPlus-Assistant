@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+
 /** The eplus.jp page stores some fields (credit card brand names like "ＶＩＳＡ"/"Ｍａｓｔｅｒ")
  *  in fullwidth Unicode forms; the collector copies them verbatim, but they read as oddly
  *  spaced-out in a Latin UI, so normalize to regular ASCII for display. */
@@ -23,20 +25,24 @@ export function csvCell(value: string | number | undefined | null): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function downloadTextFile(filename: string, content: string, mimeType: string): void {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+/** Routes a finished export through Electron's native save dialog (so the user actually
+ *  picks a folder, unlike a browser-style anchor download that silently lands in the OS
+ *  Downloads folder) and confirms with a toast once the file is actually on disk. */
+async function saveExportWithToast(input: { suggestedFileName: string; data: string; encoding: "base64" | "utf8"; filterName: string; filterExtensions: string[] }): Promise<void> {
+  const result = await window.eplusApi.saveExport(input);
+  if (result.canceled || !result.filePath) return;
+  const filePath = result.filePath;
+  toast.success(`已导出至：${filePath}`, {
+    action: { label: "在文件资源管理器中查看", onClick: () => { void window.eplusApi.showInFolder(filePath); } }
+  });
 }
 
-/** Serializes an inline SVG element to a PNG and downloads it. Draws the SVG into an
- *  off-screen canvas at 2x for crisper export, since chart SVGs here have no external
+export async function downloadTextFile(filename: string, content: string, filterName: string, filterExtensions: string[]): Promise<void> {
+  await saveExportWithToast({ suggestedFileName: filename, data: content, encoding: "utf8", filterName, filterExtensions });
+}
+
+/** Serializes an inline SVG element to a PNG and saves it via the native dialog. Draws the SVG
+ *  into an off-screen canvas at 2x for crisper export, since chart SVGs here have no external
  *  resources (no <image>/web fonts) that would need extra handling to rasterize. */
 export async function downloadSvgAsPng(svg: SVGSVGElement, filename: string, background: string): Promise<void> {
   const scale = 2;
@@ -63,14 +69,7 @@ export async function downloadSvgAsPng(svg: SVGSVGElement, filename: string, bac
   context.scale(scale, scale);
   context.drawImage(image, 0, 0, width, height);
 
-  const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) throw new Error("导出图片失败");
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  const dataUrl = canvas.toDataURL("image/png");
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  await saveExportWithToast({ suggestedFileName: filename, data: base64, encoding: "base64", filterName: "PNG 图片", filterExtensions: ["png"] });
 }

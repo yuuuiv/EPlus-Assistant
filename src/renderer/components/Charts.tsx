@@ -194,14 +194,18 @@ interface RankedBarChartProps {
   readonly labelColor: string;
   readonly valueColor: string;
   readonly maxValue?: number;
+  /** Widen the left label column past the 170-unit default - for labels that are routinely
+   *  longer than an account name (tour titles), so more of the name shows before it's cut off
+   *  and pushed to the tooltip. */
+  readonly labelWidth?: number;
   /** Recolors each bar by distance above/below `heat.midpoint` (a diverging encoding) instead
    *  of a single flat barColor - rank still comes from bar length, this adds a second read
    *  ("comfortably above half" vs "barely above half") that length alone can't show. */
   readonly heat?: RankedBarHeat;
 }
 
-function truncateLabel(label: string): string {
-  return label.length > 18 ? `${label.slice(0, 17)}…` : label;
+function truncateLabel(label: string, maxChars: number = 18): string {
+  return label.length > maxChars ? `${label.slice(0, maxChars - 1)}…` : label;
 }
 
 function heatFill(value: number, max: number, heat: RankedBarHeat): string {
@@ -221,7 +225,8 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
   const width = 1040;
   const rowHeight = 30;
   const rowGap = 8;
-  const labelWidth = 170;
+  const labelWidth = props.labelWidth ?? 170;
+  const labelMaxChars = Math.round((labelWidth * 18) / 170);
   const valueWidth = 60;
   const trackWidth = width - labelWidth - valueWidth;
   const max = props.maxValue ?? Math.max(1, ...props.items.map((item) => item.value));
@@ -236,7 +241,7 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
         return <g key={item.key}>
           <text x={labelWidth - 10} y={y + rowHeight / 2} dominantBaseline="middle" textAnchor="end" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>
             <title>{item.label}</title>
-            {truncateLabel(item.label)}
+            {truncateLabel(item.label, labelMaxChars)}
           </text>
           <rect x={labelWidth} y={y + 5} width={trackWidth} height={rowHeight - 10} rx={4} fill={props.trackColor} />
           <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.heat ? heatFill(item.value, max, props.heat) : props.barColor}>
@@ -249,43 +254,52 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
 });
 RankedBarChart.displayName = "RankedBarChart";
 
-export interface TrendPoint {
+export interface TrendBarPoint {
   readonly x: string;
-  /** Already scaled to 0-100 by the caller - lets series with different natural units (a raw
-   *  count, a percent) share one y-axis. The real number belongs in displayValue instead. */
+  /** On its own relative scale (this series' own max), not the labeled axis - the bars are
+   *  read as "which months were busier," not against a literal number on the gridlines. The
+   *  real count belongs in displayValue. */
+  readonly value: number;
+  readonly displayValue: string;
+}
+
+export interface TrendLinePoint {
+  readonly x: string;
+  /** A real 0-100 percentage - this is the series the Y-axis gridlines actually describe. */
   readonly y: number | null;
   readonly displayValue: string;
 }
 
-export interface TrendSeries {
-  readonly key: string;
-  readonly label: string;
-  readonly color: string;
-  readonly points: readonly TrendPoint[];
-}
-
 interface TrendChartProps {
-  readonly series: readonly TrendSeries[];
+  /** Rendered as recessive background bars on their own relative scale - conveys "more/less
+   *  than other months" without claiming a literal position on the (percentage) axis. */
+  readonly bar: { readonly label: string; readonly color: string; readonly points: readonly TrendBarPoint[] };
+  /** Rendered as the foreground line, plotted against the one labeled 0-100% axis. */
+  readonly line: { readonly label: string; readonly color: string; readonly points: readonly TrendLinePoint[] };
   readonly gridColor: string;
   readonly labelColor: string;
   readonly textColor: string;
   readonly mutedColor: string;
 }
 
-/** Multi-line trend over a shared category axis (e.g. months). A null y leaves a gap in that
- *  series' line rather than interpolating across missing data. */
+/** A volume-and-rate trend over a shared category axis (e.g. months). Two series with
+ *  different units can't both own the Y-axis without inventing a false correlation (see the
+ *  dataviz dual-axis anti-pattern) - so only the rate gets a labeled percentage axis, and the
+ *  volume renders as unlabeled background bars scaled to their own max, exactly like a
+ *  temperature-line-over-precipitation-bars weather chart. A null line y leaves a gap rather
+ *  than interpolating across missing data. */
 export const TrendChart = forwardRef<SVGSVGElement, TrendChartProps>((props, ref) => {
   const width = 1040;
   const marginLeft = 34;
   const marginRight = 16;
-  // Room above the 100-mark gridline for its label's ascent and the top row of markers (r=4) -
+  // Room above the 100%-mark gridline for its label's ascent and the top row of markers (r=4) -
   // without it, both get clipped flush against the viewBox's top edge.
   const topPadding = 12;
   const plotHeight = 220;
   const labelRowHeight = 28;
   const legendRowHeight = 22;
   const plotWidth = width - marginLeft - marginRight;
-  const categories = props.series[0]?.points.map((point) => point.x) ?? [];
+  const categories = props.line.points.map((point) => point.x);
   const n = categories.length;
 
   if (n === 0) {
@@ -294,24 +308,33 @@ export const TrendChart = forwardRef<SVGSVGElement, TrendChartProps>((props, ref
     </svg>;
   }
 
-  const height = topPadding + plotHeight + labelRowHeight + Math.max(props.series.length, 1) * legendRowHeight + 16;
+  const height = topPadding + plotHeight + labelRowHeight + 2 * legendRowHeight + 16;
   const xStep = n > 1 ? plotWidth / (n - 1) : 0;
   const xAt = (index: number) => marginLeft + (n > 1 ? index * xStep : plotWidth / 2);
   const yAt = (value: number) => topPadding + plotHeight - (Math.max(0, Math.min(100, value)) / 100) * plotHeight;
   const labelStride = Math.max(1, Math.ceil(n / 10));
 
+  const barMax = Math.max(1, ...props.bar.points.map((point) => point.value));
+  const barWidth = Math.min(24, Math.max(6, (n > 1 ? xStep : plotWidth) - 10));
+
   return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label="趋势图">
-    {[0, 50, 100].map((tick) => <g key={tick}>
+    {[0, 25, 50, 75, 100].map((tick) => <g key={tick}>
       <line x1={marginLeft} x2={width - marginRight} y1={yAt(tick)} y2={yAt(tick)} stroke={props.gridColor} strokeWidth={1} />
-      <text x={marginLeft - 6} y={yAt(tick) + 4} textAnchor="end" fontFamily={FONT} fontSize={10.5} fill={props.mutedColor}>{tick}</text>
+      <text x={marginLeft - 6} y={yAt(tick) + 4} textAnchor="end" fontFamily={FONT} fontSize={10.5} fill={props.mutedColor}>{tick}%</text>
     </g>)}
     {categories.map((label, index) => index % labelStride === 0
       ? <text key={`${label}-${index}`} x={xAt(index)} y={topPadding + plotHeight + 20} textAnchor="middle" fontFamily={FONT} fontSize={11.5} fill={props.mutedColor}>{label}</text>
       : null)}
-    {props.series.map((series) => {
+    {props.bar.points.map((point, index) => {
+      const barHeight = Math.max((point.value / barMax) * plotHeight, point.value > 0 ? 2 : 0);
+      return <rect key={index} x={xAt(index) - barWidth / 2} y={topPadding + plotHeight - barHeight} width={barWidth} height={barHeight} rx={2} fill={props.bar.color} fillOpacity={0.32}>
+        <title>{`${props.bar.label} · ${categories[index]}：${point.displayValue}`}</title>
+      </rect>;
+    })}
+    {(() => {
       const runs: { x: number; y: number }[][] = [];
       let current: { x: number; y: number }[] = [];
-      series.points.forEach((point, index) => {
+      props.line.points.forEach((point, index) => {
         if (point.y === null) {
           if (current.length > 0) runs.push(current);
           current = [];
@@ -320,17 +343,17 @@ export const TrendChart = forwardRef<SVGSVGElement, TrendChartProps>((props, ref
         current.push({ x: xAt(index), y: yAt(point.y) });
       });
       if (current.length > 0) runs.push(current);
-      return <g key={series.key}>
+      return <g>
         {runs.map((run, runIndex) => run.length > 1
-          ? <polyline key={runIndex} points={run.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={series.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          ? <polyline key={runIndex} points={run.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={props.line.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           : null)}
-        {series.points.map((point, index) => point.y === null ? null : <circle key={index} cx={xAt(index)} cy={yAt(point.y)} r={4} fill={series.color}>
-          <title>{`${series.label} · ${categories[index]}：${point.displayValue}`}</title>
+        {props.line.points.map((point, index) => point.y === null ? null : <circle key={index} cx={xAt(index)} cy={yAt(point.y)} r={4} fill={props.line.color}>
+          <title>{`${props.line.label} · ${categories[index]}：${point.displayValue}`}</title>
         </circle>)}
       </g>;
-    })}
+    })()}
     <g transform={`translate(0, ${topPadding + plotHeight + labelRowHeight})`}>
-      {props.series.map((series, index) => <g key={series.key} transform={`translate(0, ${index * legendRowHeight})`}>
+      {[props.bar, props.line].map((series, index) => <g key={series.label} transform={`translate(0, ${index * legendRowHeight})`}>
         <rect x={0} y={4} width={13} height={13} rx={3} fill={series.color} />
         <text x={21} y={14} fontFamily={FONT} fontSize={13} fill={props.textColor}>{series.label}</text>
       </g>)}
@@ -414,6 +437,9 @@ export interface ScatterPoint {
   readonly y: number;
   readonly label: string;
   readonly displayValue: string;
+  /** Draw a small direct label next to this point - reserve for the few points the story is
+   *  about (see the dataviz "label selectively" rule); most points rely on the hover tooltip. */
+  readonly showLabel?: boolean;
 }
 
 interface ScatterChartProps {
@@ -426,6 +452,12 @@ interface ScatterChartProps {
   readonly gridColor: string;
   readonly labelColor: string;
   readonly mutedColor: string;
+  /** A dashed vertical threshold line (e.g. median X) - deliberately dashed to read as "a
+   *  threshold," distinct from the solid scale gridlines. */
+  readonly xReference?: number;
+  /** Short captions dropped into the four corners of the plot so the two axes read as an
+   *  interpretable 2x2 frame instead of a bare unlabeled scatter. */
+  readonly quadrantLabels?: { readonly topRight: string; readonly topLeft: string; readonly bottomRight: string; readonly bottomLeft: string };
 }
 
 /** Linear X/Y scatter - X is whatever scale the caller passes (e.g. a raw demand count), Y is
@@ -464,9 +496,25 @@ export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props,
       const value = Math.round((maxX / xTickCount) * index);
       return <text key={index} x={xAt(value)} y={marginTop + plotHeight + 18} textAnchor="middle" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{value}</text>;
     })}
+    {props.quadrantLabels ? <g>
+      <text x={width - marginRight - 6} y={marginTop + 12} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topRight}</text>
+      <text x={marginLeft + 6} y={marginTop + 12} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topLeft}</text>
+      <text x={width - marginRight - 6} y={marginTop + plotHeight - 8} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomRight}</text>
+      <text x={marginLeft + 6} y={marginTop + plotHeight - 8} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomLeft}</text>
+    </g> : null}
+    {props.xReference !== undefined ? (
+      // Line only, no inline label here - the top-left corner already carries the Y-axis
+      // caption and a quadrant label, and a reference value near the left edge would collide
+      // with both. The muted caption text below the chart explains what the dashed line is.
+      <line x1={xAt(props.xReference)} x2={xAt(props.xReference)} y1={marginTop} y2={marginTop + plotHeight} stroke={props.mutedColor} strokeWidth={1} strokeDasharray="4 3" />
+    ) : null}
     {props.points.map((point) => {
       const cx = xAt(point.x);
       const cy = yAt(point.y);
+      const nearRightEdge = cx > width - marginRight - 60;
+      const nearLeftEdge = cx < marginLeft + 60;
+      const labelAnchor = nearRightEdge ? "end" : nearLeftEdge ? "start" : "middle";
+      const labelX = nearRightEdge ? Math.min(cx + 8, width - marginRight) : nearLeftEdge ? Math.max(cx - 8, marginLeft) : cx;
       return <g key={point.key}>
         {/* Invisible but hit-testable - a 5px dot is a pinpoint target, so the actual hover/
            focus area is a generous 24px circle around it, per the interaction spec. */}
@@ -474,6 +522,7 @@ export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props,
           <title>{`${point.label}：${point.displayValue}`}</title>
         </circle>
         <circle cx={cx} cy={cy} r={5} fill={props.pointColor} fillOpacity={0.85} stroke={props.ringColor} strokeWidth={2} pointerEvents="none" />
+        {point.showLabel ? <text x={labelX} y={cy - 10} textAnchor={labelAnchor} fontFamily={FONT} fontSize={11} fill={props.labelColor}>{truncateLabel(point.label, 14)}</text> : null}
       </g>;
     })}
     <text x={marginLeft + plotWidth / 2} y={height - 4} textAnchor="middle" fontFamily={FONT} fontSize={12} fill={props.labelColor}>{props.xLabel}</text>

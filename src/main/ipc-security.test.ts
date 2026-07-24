@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler)) },
-  shell: { openPath: vi.fn(async () => "") }
+  shell: { openPath: vi.fn(async () => ""), showItemInFolder: vi.fn() },
+  dialog: { showSaveDialog: vi.fn(async () => ({ canceled: true })) }
 }));
 
 import { registerIpc } from "./ipc.js";
@@ -27,7 +28,9 @@ describe("IPC Security", () => {
       "profile:get",
       "profile:list-lottery-records",
       "stats:get-overview",
-      "app:open-data-folder"
+      "app:open-data-folder",
+      "app:save-export",
+      "app:show-in-folder"
     ]));
   });
 

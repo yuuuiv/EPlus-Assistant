@@ -10,7 +10,9 @@ const api: ElectronApi = {
   listProfiles: (accountId) => ipcRenderer.invoke("profile:get", accountId),
   listLotteryRecords: (accountId) => ipcRenderer.invoke("profile:list-lottery-records", accountId),
   getAccountsOverview: () => ipcRenderer.invoke("stats:get-overview"),
-  openDataFolder: () => ipcRenderer.invoke("app:open-data-folder")
+  openDataFolder: () => ipcRenderer.invoke("app:open-data-folder"),
+  saveExport: (input) => ipcRenderer.invoke("app:save-export", input),
+  showInFolder: (filePath) => ipcRenderer.invoke("app:show-in-folder", filePath)
 };
 
 contextBridge.exposeInMainWorld("eplusApi", api);

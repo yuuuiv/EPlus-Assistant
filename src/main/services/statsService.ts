@@ -12,7 +12,6 @@ import type {
 import { buildAdvancedStats } from "./analyticsService.js";
 
 const RECENT_ACTIVITY_LIMIT = 8;
-const TOP_PERFORMANCES_LIMIT = 5;
 
 const UNKNOWN_GENDER = "未知";
 
@@ -104,8 +103,7 @@ function buildTopPerformances(records: readonly LotteryRecord[]): TopPerformance
       totalDraws: group.records.length,
       accountCount: group.accountIds.size
     }))
-    .sort((a, b) => b.totalDraws - a.totalDraws)
-    .slice(0, TOP_PERFORMANCES_LIMIT);
+    .sort((a, b) => b.totalDraws - a.totalDraws);
 }
 
 export function buildAccountsOverview(

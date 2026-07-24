@@ -1,5 +1,6 @@
 import path from "node:path";
-import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
+import { writeFile } from "node:fs/promises";
+import { dialog, shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
 import type { AppDatabase } from "./storage/database.js";
 import type { SecretStore } from "./storage/secretStore.js";
@@ -48,6 +49,18 @@ const lotteryRecordSchema = z
   .strict();
 
 const setPasswordSchema = z.object({ accountId: idSchema, password: z.string().min(1) }).strict();
+
+const saveExportSchema = z
+  .object({
+    suggestedFileName: z.string().trim().min(1).max(255),
+    data: z.string(),
+    encoding: z.enum(["base64", "utf8"]),
+    filterName: z.string().trim().min(1).max(100),
+    filterExtensions: z.array(z.string().trim().min(1).max(10)).min(1).max(5)
+  })
+  .strict();
+
+const filePathSchema = z.string().trim().min(1).max(4096);
 
 const importHarvestSchema = z
   .object({
@@ -125,6 +138,16 @@ export function registerIpc(window: BrowserWindow, db: AppDatabase, secretStore:
   registerHandler("profile:list-lottery-records", window, idSchema, (accountId) => accountService.listLotteryRecords(accountId));
   registerHandler("stats:get-overview", window, emptySchema, () => accountService.getAccountsOverview());
   registerHandler("app:open-data-folder", window, emptySchema, () => shell.openPath(path.resolve(db.getDataDir())));
+  registerHandler("app:save-export", window, saveExportSchema, async (input) => {
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: input.suggestedFileName,
+      filters: [{ name: input.filterName, extensions: input.filterExtensions }]
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    await writeFile(result.filePath, Buffer.from(input.data, input.encoding));
+    return { canceled: false, filePath: result.filePath };
+  });
+  registerHandler("app:show-in-folder", window, filePathSchema, (filePath) => shell.showItemInFolder(filePath));
 
   window.webContents.once("did-finish-load", () => {
     db.addLog({ level: "info", message: "Renderer loaded.", metadata: {} });

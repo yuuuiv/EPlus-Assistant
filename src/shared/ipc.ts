@@ -6,7 +6,9 @@ import type {
   HarvestImportPayload,
   ImportHarvestResult,
   LotteryRecord,
-  PasswordRevealResponse
+  PasswordRevealResponse,
+  SaveExportInput,
+  SaveExportResult
 } from "./types.js";
 
 export interface ImportHarvestInput {
@@ -28,6 +30,8 @@ export interface ElectronApi {
   listLotteryRecords(accountId: string): Promise<LotteryRecord[]>;
   getAccountsOverview(): Promise<AccountsOverview>;
   openDataFolder(): Promise<void>;
+  saveExport(input: SaveExportInput): Promise<SaveExportResult>;
+  showInFolder(filePath: string): Promise<void>;
 }
 
 declare global {
@@ -59,5 +63,7 @@ export type {
   PasswordRevealResponse,
   PerformanceHeatPoint,
   PerformanceHistory,
+  SaveExportInput,
+  SaveExportResult,
   TopPerformanceEntry
 } from "./types.js";
