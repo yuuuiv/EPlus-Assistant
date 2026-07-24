@@ -96,7 +96,7 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
       y: Math.round((point.participantWinRate ?? 0) * 100),
       label: point.tourName,
       displayValue: `${point.totalDraws} 次抽选 · ${point.accountCount} 个账号参与 · 参与账号中率 ${formatPercent(point.participantWinRate)}`,
-      showLabel: topDemandKeys.has(point.performanceKey)
+      highlighted: topDemandKeys.has(point.performanceKey)
     }));
 
   return <section className="workspace-panel" aria-labelledby="analytics-title">
@@ -132,14 +132,13 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
         labelColor={colors.textMuted}
         valueColor={colors.text}
         maxValue={100}
-        labelWidth={320}
         heat={{ cool: colors.chart1, warm: colors.chart3, neutral: colors.textMuted, midpoint: 50 }}
       />
     </section>
 
     <section className="panel-card">
       <div className="panel-head"><h2><Coins size={16} />投入产出比</h2><div className="actions"><InvestmentGranularityToggle value={investmentGranularity} onChange={setInvestmentGranularity} /><button className="icon-button" onClick={() => void exportChart(investmentChartRef, "投入产出比")}><ImageDown size={14} />导出图片</button></div></div>
-      <p className="muted">条形长度 = 中选次数 / 投入抽选份数；悬停条形查看"中选数/投入数"原始值；已过滤掉投入不足 3 份的系列/场次，避免样本太薄的噪音。</p>
+      <p className="muted">条形长度 = 中选次数 / 投入抽选份数；悬停条形查看"中选数/投入数"原始值；已过滤掉投入不足 3 份的系列/场次，避免样本太薄的噪音；拖动标签与条形之间的分隔线可调整两栏宽度。</p>
       <div key={investmentGranularity} className="chart-swap">
         <RankedBarChart
           ref={investmentChartRef}
@@ -148,7 +147,6 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
           labelColor={colors.textMuted}
           valueColor={colors.text}
           maxValue={100}
-          labelWidth={320}
           barColor={colors.chart2}
         />
       </div>
@@ -156,7 +154,7 @@ export function AdvancedAnalytics(props: AdvancedAnalyticsProps) {
 
     <section className="panel-card">
       <div className="panel-head"><h2><ChartScatter size={16} />热度-难度相关性</h2><button className="icon-button" onClick={() => void exportChart(heatChartRef, "热度难度相关性")}><ImageDown size={14} />导出图片</button></div>
-      <p className="muted">横轴是该场公演的总抽选份数（跨账号，代表热度），纵轴是参与账号里最终中过的比例（代表实际难度）。虚线是热度中位数；标了名字的是热度最高的 3 场；四角的文字标出了"热门/冷门 × 好中/难中"这四个象限各自的含义。</p>
+      <p className="muted">横轴是该场公演的总抽选份数（跨账号，代表热度），纵轴是参与账号里最终中过的比例（代表实际难度）。虚线是热度中位数；带光晕的是热度最高的 3 场；悬停任意点查看名称与详细数据；四角的文字标出了"热门/冷门 × 好中/难中"这四个象限各自的含义。</p>
       <ScatterChart
         ref={heatChartRef}
         points={heatPoints}

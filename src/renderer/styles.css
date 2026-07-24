@@ -1040,6 +1040,8 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ── Charts ──────────────────────────────────────────────────────────── */
 .chart-svg { display: block; width: 100%; height: auto; }
+.ranked-bar-resize-handle { cursor: ew-resize; touch-action: none; }
+.ranked-bar-resize-handle:hover, .ranked-bar-resize-handle:active { fill: var(--border-strong); fill-opacity: 0.35; }
 .chart-swap { animation: chart-fade-in 260ms var(--ease-out) both; }
 @keyframes chart-fade-in { from { opacity: 0; transform: translateY(4px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) {
@@ -1053,6 +1055,9 @@ tbody tr:last-child td { border-bottom: none; }
 .activity-item-text { display: grid; gap: 0.15rem; min-width: 0; flex: 1 1 auto; }
 .activity-item-text strong { font-weight: 600; overflow-wrap: anywhere; }
 .ranking-index { display: grid; place-items: center; flex: 0 0 auto; inline-size: 1.8rem; block-size: 1.8rem; border-radius: 50%; background: var(--primary-dim); color: var(--primary); font-weight: 700; font-size: 0.85rem; }
+.ranking-item-clickable { cursor: pointer; }
+.ranking-item-clickable:hover { border-color: var(--border-strong); background: var(--surface-c); }
+.ranking-item-clickable:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--focus-ring); }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 1300px) {

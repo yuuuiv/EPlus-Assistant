@@ -214,14 +214,27 @@ export interface AccountOverviewEntry {
   stats: AccountLotteryStats;
 }
 
+/** One account's participation in a TopPerformanceEntry: how many times it drew for that
+ *  performance, and the best outcome it got there (won if it ever won, else lost if it ever
+ *  lost, else pending) - same "any win counts" rule PerformanceHistory.wonAtLeastOnce uses. */
+export interface TopPerformanceAccountEntry {
+  accountId: string;
+  totalDraws: number;
+  outcome: LotteryOutcome;
+}
+
 /** One tour+event-date grouping aggregated across every account, for "which performances got
- *  drawn for the most" - distinct from PerformanceHistory, which is scoped to one account. */
+ *  drawn for by the most accounts" - distinct from PerformanceHistory, which is scoped to one
+ *  account. */
 export interface TopPerformanceEntry {
   performanceKey: string;
   tourName: string;
   eventDatetime?: string;
   totalDraws: number;
   accountCount: number;
+  /** Sorted by totalDraws desc - the per-account detail behind accountCount/totalDraws, shown
+   *  when the user drills into one performance. */
+  accounts: TopPerformanceAccountEntry[];
 }
 
 export interface AccountsOverview {

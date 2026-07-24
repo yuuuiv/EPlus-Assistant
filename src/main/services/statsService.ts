@@ -7,6 +7,7 @@ import type {
   LotteryOutcome,
   LotteryRecord,
   PerformanceHistory,
+  TopPerformanceAccountEntry,
   TopPerformanceEntry
 } from "../../shared/types.js";
 import { buildAdvancedStats } from "./analyticsService.js";
@@ -29,13 +30,42 @@ export function performanceKey(record: LotteryRecord): string {
   return `${record.tourName}||${record.eventDatetime || record.receptionName || record.venueName || ""}`;
 }
 
+/** eplus.jp's free-text event_datetime ("2027/01/28(木) 17:45開場 18:30開演") isn't something
+ *  `Date.parse` can be trusted with directly, but the leading "YYYY/MM/DD" plus its first HH:MM
+ *  (doors-open time) is structured in every observed format - same trick as analyticsService.ts's
+ *  monthKey, just keeping time-of-day too since this feeds a finer-grained sort, not a month
+ *  bucket. */
+const EVENT_DATETIME_PATTERN = /^(\d{4})\/(\d{2})\/(\d{2}).*?(\d{1,2}):(\d{2})/;
+function parseEventDatetime(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = EVENT_DATETIME_PATTERN.exec(value);
+  if (match) {
+    const [, year, month, day, hour, minute] = match;
+    const time = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
+    return Number.isNaN(time) ? undefined : time;
+  }
+  const fallback = Date.parse(value);
+  return Number.isNaN(fallback) ? undefined : fallback;
+}
+
 /** More recent first: order_datetime is the site's own application timestamp, so it's the best
- *  signal for which of several draws against the same performance is the "current" one. Falls
- *  back to string comparison when it isn't a parseable date (format isn't guaranteed). */
+ *  signal for which of several draws against the same performance is the "current" one - but the
+ *  collector doesn't reliably capture it (every record observed so far has it blank), which used
+ *  to make this comparator treat every pair as tied and fall through to whatever arbitrary order
+ *  the underlying query/merge happened to produce (visible as a shuffled "recent activity" feed).
+ *  Falls back to event_datetime, a real (if imperfect - it's when the show happens, not when the
+ *  entry was submitted) chronological signal that's actually populated. */
 function byRecency(a: LotteryRecord, b: LotteryRecord): number {
   const aTime = Date.parse(a.orderDatetime ?? "");
   const bTime = Date.parse(b.orderDatetime ?? "");
   if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
+  if (!Number.isNaN(aTime)) return -1;
+  if (!Number.isNaN(bTime)) return 1;
+  const aEvent = parseEventDatetime(a.eventDatetime);
+  const bEvent = parseEventDatetime(b.eventDatetime);
+  if (aEvent !== undefined && bEvent !== undefined) return bEvent - aEvent;
+  if (aEvent !== undefined) return -1;
+  if (bEvent !== undefined) return 1;
   return (b.orderDatetime ?? "").localeCompare(a.orderDatetime ?? "");
 }
 
@@ -96,14 +126,32 @@ function buildTopPerformances(records: readonly LotteryRecord[]): TopPerformance
     group.accountIds.add(record.accountId);
   }
   return Array.from(groups.entries())
-    .map(([key, group]): TopPerformanceEntry => ({
-      performanceKey: key,
-      tourName: group.tourName,
-      eventDatetime: group.eventDatetime,
-      totalDraws: group.records.length,
-      accountCount: group.accountIds.size
-    }))
-    .sort((a, b) => b.totalDraws - a.totalDraws);
+    .map(([key, group]): TopPerformanceEntry => {
+      const recordsByAccount = new Map<string, LotteryRecord[]>();
+      for (const record of group.records) {
+        const bucket = recordsByAccount.get(record.accountId);
+        if (bucket) bucket.push(record);
+        else recordsByAccount.set(record.accountId, [record]);
+      }
+      const accounts: TopPerformanceAccountEntry[] = Array.from(recordsByAccount.entries())
+        .map(([accountId, accountRecords]): TopPerformanceAccountEntry => {
+          const outcomes = accountRecords.map((record) => classifyOutcome(record.status));
+          const outcome: LotteryOutcome = outcomes.includes("won") ? "won" : outcomes.includes("lost") ? "lost" : "pending";
+          return { accountId, totalDraws: accountRecords.length, outcome };
+        })
+        .sort((a, b) => b.totalDraws - a.totalDraws);
+      return {
+        performanceKey: key,
+        tourName: group.tourName,
+        eventDatetime: group.eventDatetime,
+        totalDraws: group.records.length,
+        accountCount: group.accountIds.size,
+        accounts
+      };
+    })
+    // Most accounts drawing for it first (the "hottest by reach" ranking), draw-count as a
+    // tiebreaker for performances tied on account count.
+    .sort((a, b) => b.accountCount - a.accountCount || b.totalDraws - a.totalDraws);
 }
 
 export function buildAccountsOverview(

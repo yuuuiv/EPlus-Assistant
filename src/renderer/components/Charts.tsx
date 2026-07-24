@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef, useCallback, useRef, useState } from "react";
 
 const FONT = "'Segoe UI', system-ui, -apple-system, sans-serif";
 
@@ -194,9 +194,10 @@ interface RankedBarChartProps {
   readonly labelColor: string;
   readonly valueColor: string;
   readonly maxValue?: number;
-  /** Widen the left label column past the 170-unit default - for labels that are routinely
-   *  longer than an account name (tour titles), so more of the name shows before it's cut off
-   *  and pushed to the tooltip. */
+  /** Override the shared 320-unit default label-column width - callers only need this for an
+   *  unusual case, not just to match another chart (the default already keeps every ranked-bar
+   *  chart in the app visually consistent). The reader can still drag the divider at runtime
+   *  regardless of what this starts at. */
   readonly labelWidth?: number;
   /** Recolors each bar by distance above/below `heat.midpoint` (a diverging encoding) instead
    *  of a single flat barColor - rank still comes from bar length, this adds a second read
@@ -215,6 +216,19 @@ function heatFill(value: number, max: number, heat: RankedBarHeat): string {
   return `color-mix(in srgb, ${t >= 0 ? heat.warm : heat.cool} ${pct}%, ${heat.neutral})`;
 }
 
+/** Merges a forwardRef's ref with a locally-owned one, so a component can both expose its DOM
+ *  node to a caller (export-to-PNG) and read from it itself (measuring the rendered size for
+ *  drag-to-resize, which needs real pixel dimensions that only the DOM node has). */
+function useMergedRef<T>(forwardedRef: React.ForwardedRef<T>): [React.RefObject<T | null>, (node: T | null) => void] {
+  const localRef = useRef<T | null>(null);
+  const setRef = useCallback((node: T | null) => {
+    localRef.current = node;
+    if (typeof forwardedRef === "function") forwardedRef(node);
+    else if (forwardedRef) (forwardedRef as React.MutableRefObject<T | null>).current = node;
+  }, [forwardedRef]);
+  return [localRef, setRef];
+}
+
 /** Magnitude comparison across accounts/performances - single sequential hue, sorted by the
  *  caller, direct-labeled (no legend needed for one series per the dataviz method). */
 export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((props, ref) => {
@@ -225,31 +239,86 @@ export const RankedBarChart = forwardRef<SVGSVGElement, RankedBarChartProps>((pr
   const width = 1040;
   const rowHeight = 30;
   const rowGap = 8;
-  const labelWidth = props.labelWidth ?? 170;
-  const labelMaxChars = Math.round((labelWidth * 18) / 170);
   const valueWidth = 60;
+  // Leaves at least this much room for the bar track itself, however wide the label column gets.
+  const minTrackWidth = 160;
+  const minLabelWidth = 70;
+  const maxLabelWidth = width - valueWidth - minTrackWidth;
+  // 320 by default (not 170) so every ranked-bar chart in the app - account win rates here, tour
+  // names in 深度分析 - starts at the same label/bar column split; callers no longer need to pass
+  // their own labelWidth just to match each other.
+  const defaultLabelWidth = Math.min(Math.max(props.labelWidth ?? 320, minLabelWidth), maxLabelWidth);
+  // User drag overrides the caller's default once they've resized; unset means "use the prop".
+  const [labelWidthOverride, setLabelWidthOverride] = useState<number | undefined>(undefined);
+  const labelWidth = labelWidthOverride ?? defaultLabelWidth;
+  const labelMaxChars = Math.round((labelWidth * 18) / 170);
   const trackWidth = width - labelWidth - valueWidth;
   const max = props.maxValue ?? Math.max(1, ...props.items.map((item) => item.value));
   const height = props.items.length > 0 ? props.items.length * (rowHeight + rowGap) - rowGap : rowHeight;
+  const svgHeight = Math.max(height, rowHeight);
 
-  return <svg ref={ref} viewBox={`0 0 ${width} ${Math.max(height, rowHeight)}`} className="chart-svg" role="img" aria-label="排行图">
+  const [svgRef, setSvgRef] = useMergedRef(ref);
+  const dragRef = useRef<{ startClientX: number; startLabelWidth: number; scale: number } | undefined>(undefined);
+
+  function beginResize(event: React.PointerEvent<SVGRectElement>): void {
+    const svg = svgRef.current;
+    const rect = svg?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    dragRef.current = { startClientX: event.clientX, startLabelWidth: labelWidth, scale: width / rect.width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function continueResize(event: React.PointerEvent<SVGRectElement>): void {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const deltaUnits = (event.clientX - drag.startClientX) * drag.scale;
+    setLabelWidthOverride(Math.min(maxLabelWidth, Math.max(minLabelWidth, drag.startLabelWidth + deltaUnits)));
+  }
+
+  function endResize(event: React.PointerEvent<SVGRectElement>): void {
+    dragRef.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  return <svg ref={setSvgRef} viewBox={`0 0 ${width} ${svgHeight}`} className="chart-svg" role="img" aria-label="排行图">
     {props.items.length === 0
       ? <text x={0} y={rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={13} fill={props.labelColor}>暂无数据</text>
-      : props.items.map((item, index) => {
-        const y = index * (rowHeight + rowGap);
-        const barWidth = max > 0 ? Math.max((item.value / max) * trackWidth, item.value > 0 ? 3 : 0) : 0;
-        return <g key={item.key}>
-          <text x={labelWidth - 10} y={y + rowHeight / 2} dominantBaseline="middle" textAnchor="end" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>
-            <title>{item.label}</title>
-            {truncateLabel(item.label, labelMaxChars)}
-          </text>
-          <rect x={labelWidth} y={y + 5} width={trackWidth} height={rowHeight - 10} rx={4} fill={props.trackColor} />
-          <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.heat ? heatFill(item.value, max, props.heat) : props.barColor}>
-            <title>{`${item.label}：${item.displayValue}${item.detail ? `（${item.detail}）` : ""}`}</title>
-          </rect>
-          <text x={labelWidth + trackWidth + 10} y={y + rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>{item.displayValue}</text>
-        </g>;
-      })}
+      : <>
+        {props.items.map((item, index) => {
+          const y = index * (rowHeight + rowGap);
+          const barWidth = max > 0 ? Math.max((item.value / max) * trackWidth, item.value > 0 ? 3 : 0) : 0;
+          return <g key={item.key}>
+            <text x={labelWidth - 10} y={y + rowHeight / 2} dominantBaseline="middle" textAnchor="end" fontFamily={FONT} fontSize={12.5} fill={props.labelColor}>
+              <title>{item.label}</title>
+              {truncateLabel(item.label, labelMaxChars)}
+            </text>
+            <rect x={labelWidth} y={y + 5} width={trackWidth} height={rowHeight - 10} rx={4} fill={props.trackColor} />
+            <rect x={labelWidth} y={y + 5} width={barWidth} height={rowHeight - 10} rx={4} fill={props.heat ? heatFill(item.value, max, props.heat) : props.barColor}>
+              <title>{`${item.label}：${item.displayValue}${item.detail ? `（${item.detail}）` : ""}`}</title>
+            </rect>
+            <text x={labelWidth + trackWidth + 10} y={y + rowHeight / 2} dominantBaseline="middle" fontFamily={FONT} fontSize={12.5} style={{ fontVariantNumeric: "tabular-nums" }} fill={props.valueColor}>{item.displayValue}</text>
+          </g>;
+        })}
+        {/* Draggable divider between the label and bar columns - a wide (16-unit) invisible hit
+           target centered on a thin visible line, so it's a comfortable grab target without
+           looking thicker than it is. Static in the exported PNG (no :hover state there), which
+           is exactly right since there's nothing to drag in a still image. */}
+        <line x1={labelWidth} x2={labelWidth} y1={0} y2={svgHeight} stroke={props.trackColor} strokeWidth={2} pointerEvents="none" />
+        <rect
+          className="ranked-bar-resize-handle"
+          x={labelWidth - 8}
+          y={0}
+          width={16}
+          height={svgHeight}
+          fill="transparent"
+          onPointerDown={beginResize}
+          onPointerMove={continueResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+        >
+          <title>拖动调整左右栏宽度</title>
+        </rect>
+      </>}
   </svg>;
 });
 RankedBarChart.displayName = "RankedBarChart";
@@ -437,9 +506,11 @@ export interface ScatterPoint {
   readonly y: number;
   readonly label: string;
   readonly displayValue: string;
-  /** Draw a small direct label next to this point - reserve for the few points the story is
-   *  about (see the dataviz "label selectively" rule); most points rely on the hover tooltip. */
-  readonly showLabel?: boolean;
+  /** Draws this point with a larger radius and a soft halo instead of direct on-chart text -
+   *  every point uses the same hover-tooltip interaction (see the point's <title>), so a handful
+   *  of points can still be called out as notable without some points reading as "click/hover for
+   *  info" and others as "already labeled," which is a confusing mix at a glance. */
+  readonly highlighted?: boolean;
 }
 
 interface ScatterChartProps {
@@ -469,10 +540,16 @@ export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props,
   // A reserved band above the plot for the Y-axis caption, so it doesn't collide with the
   // "100%" gridline label sitting right at the plot's top edge.
   const yLabelBand = 22;
-  const marginTop = 10 + yLabelBand;
+  // A second reserved band, above and below the plot, exclusively for the quadrant captions -
+  // keeping them fully outside the [marginTop, marginTop+plotHeight] data rectangle guarantees
+  // they can never sit on top of a point, unlike drawing them in the plot's own corners (where a
+  // point in that exact quadrant is, by definition, likely to land).
+  const quadrantBand = props.quadrantLabels ? 18 : 0;
+  const marginTop = 10 + yLabelBand + quadrantBand;
   const plotHeight = 280;
   const axisLabelHeight = 34;
   const plotWidth = width - marginLeft - marginRight;
+  const plotBottom = marginTop + plotHeight;
 
   if (props.points.length === 0) {
     return <svg ref={ref} viewBox={`0 0 ${width} ${plotHeight}`} className="chart-svg" role="img" aria-label="散点图">
@@ -480,10 +557,10 @@ export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props,
     </svg>;
   }
 
-  const height = marginTop + plotHeight + axisLabelHeight + 20;
+  const height = plotBottom + quadrantBand + axisLabelHeight + 20;
   const maxX = Math.max(1, ...props.points.map((point) => point.x));
   const xAt = (value: number) => marginLeft + (value / maxX) * plotWidth;
-  const yAt = (value: number) => marginTop + plotHeight - (Math.max(0, Math.min(100, value)) / 100) * plotHeight;
+  const yAt = (value: number) => plotBottom - (Math.max(0, Math.min(100, value)) / 100) * plotHeight;
   const yTicks = [0, 25, 50, 75, 100];
   const xTickCount = 5;
 
@@ -494,35 +571,33 @@ export const ScatterChart = forwardRef<SVGSVGElement, ScatterChartProps>((props,
     </g>)}
     {Array.from({ length: xTickCount + 1 }, (_, index) => {
       const value = Math.round((maxX / xTickCount) * index);
-      return <text key={index} x={xAt(value)} y={marginTop + plotHeight + 18} textAnchor="middle" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{value}</text>;
+      return <text key={index} x={xAt(value)} y={plotBottom + quadrantBand + 18} textAnchor="middle" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{value}</text>;
     })}
     {props.quadrantLabels ? <g>
-      <text x={width - marginRight - 6} y={marginTop + 12} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topRight}</text>
-      <text x={marginLeft + 6} y={marginTop + 12} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topLeft}</text>
-      <text x={width - marginRight - 6} y={marginTop + plotHeight - 8} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomRight}</text>
-      <text x={marginLeft + 6} y={marginTop + plotHeight - 8} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomLeft}</text>
+      <text x={width - marginRight - 6} y={marginTop - 8} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topRight}</text>
+      <text x={marginLeft + 6} y={marginTop - 8} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.topLeft}</text>
+      <text x={width - marginRight - 6} y={plotBottom + quadrantBand - 5} textAnchor="end" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomRight}</text>
+      <text x={marginLeft + 6} y={plotBottom + quadrantBand - 5} textAnchor="start" fontFamily={FONT} fontSize={11} fill={props.mutedColor}>{props.quadrantLabels.bottomLeft}</text>
     </g> : null}
     {props.xReference !== undefined ? (
-      // Line only, no inline label here - the top-left corner already carries the Y-axis
+      // Line only, no inline label here - the quadrant band above already carries the Y-axis
       // caption and a quadrant label, and a reference value near the left edge would collide
       // with both. The muted caption text below the chart explains what the dashed line is.
-      <line x1={xAt(props.xReference)} x2={xAt(props.xReference)} y1={marginTop} y2={marginTop + plotHeight} stroke={props.mutedColor} strokeWidth={1} strokeDasharray="4 3" />
+      <line x1={xAt(props.xReference)} x2={xAt(props.xReference)} y1={marginTop} y2={plotBottom} stroke={props.mutedColor} strokeWidth={1} strokeDasharray="4 3" />
     ) : null}
     {props.points.map((point) => {
       const cx = xAt(point.x);
       const cy = yAt(point.y);
-      const nearRightEdge = cx > width - marginRight - 60;
-      const nearLeftEdge = cx < marginLeft + 60;
-      const labelAnchor = nearRightEdge ? "end" : nearLeftEdge ? "start" : "middle";
-      const labelX = nearRightEdge ? Math.min(cx + 8, width - marginRight) : nearLeftEdge ? Math.max(cx - 8, marginLeft) : cx;
       return <g key={point.key}>
         {/* Invisible but hit-testable - a 5px dot is a pinpoint target, so the actual hover/
-           focus area is a generous 24px circle around it, per the interaction spec. */}
+           focus area is a generous 24px circle around it, per the interaction spec. Every point
+           carries the same tooltip-only interaction; `highlighted` only ever changes the dot's
+           static size/halo below, never adds a second, inconsistent way to read a point. */}
         <circle cx={cx} cy={cy} r={12} fill="transparent" style={{ pointerEvents: "all" }}>
           <title>{`${point.label}：${point.displayValue}`}</title>
         </circle>
-        <circle cx={cx} cy={cy} r={5} fill={props.pointColor} fillOpacity={0.85} stroke={props.ringColor} strokeWidth={2} pointerEvents="none" />
-        {point.showLabel ? <text x={labelX} y={cy - 10} textAnchor={labelAnchor} fontFamily={FONT} fontSize={11} fill={props.labelColor}>{truncateLabel(point.label, 14)}</text> : null}
+        {point.highlighted ? <circle cx={cx} cy={cy} r={9} fill={props.pointColor} fillOpacity={0.22} pointerEvents="none" /> : null}
+        <circle cx={cx} cy={cy} r={point.highlighted ? 6.5 : 5} fill={props.pointColor} fillOpacity={0.85} stroke={props.ringColor} strokeWidth={2} pointerEvents="none" />
       </g>;
     })}
     <text x={marginLeft + plotWidth / 2} y={height - 4} textAnchor="middle" fontFamily={FONT} fontSize={12} fill={props.labelColor}>{props.xLabel}</text>

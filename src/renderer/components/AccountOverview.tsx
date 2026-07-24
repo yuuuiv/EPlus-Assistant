@@ -1,6 +1,6 @@
 import { BarChart3, Download, Flame, History, ImageDown, PercentCircle, PieChart, Ticket, Trophy, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountOverviewEntry, AccountsOverview, LotteryOutcome, LotteryRecord, PerformanceHistory, TopPerformanceEntry } from "../../shared/ipc.js";
+import type { AccountOverviewEntry, AccountsOverview, LotteryOutcome, LotteryRecord, PerformanceHistory, TopPerformanceAccountEntry, TopPerformanceEntry } from "../../shared/ipc.js";
 import { csvCell, downloadSvgAsPng, downloadTextFile, formatDateTime, formatPercent } from "../format.js";
 import { useThemeColors } from "../useThemeColors.js";
 import { DonutChart, RankedBarChart, SegmentBarChart, type RankedItem, type Segment } from "./Charts.js";
@@ -37,18 +37,40 @@ const OUTCOME_LABEL: Record<LotteryOutcome, string> = { won: "当选", lost: "�
  *  account doesn't suddenly show a much longer or shorter list. */
 const RECENT_ACTIVITY_DISPLAY_LIMIT = 8;
 
-/** Mirrors statsService.ts's private byRecency - can't import a main-process helper into the
- *  renderer, so the same "order_datetime desc, falling back to string compare" rule is
- *  duplicated here for the one place the renderer needs to re-sort records itself. */
+/** Mirrors statsService.ts's private byRecency/parseEventDatetime - can't import a main-process
+ *  helper into the renderer, so the same "order_datetime desc, falling back to event_datetime,
+ *  falling back to string compare" rule is duplicated here for the one place the renderer needs
+ *  to re-sort records itself. */
+const EVENT_DATETIME_PATTERN = /^(\d{4})\/(\d{2})\/(\d{2}).*?(\d{1,2}):(\d{2})/;
+function parseEventDatetime(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = EVENT_DATETIME_PATTERN.exec(value);
+  if (match) {
+    const [, year, month, day, hour, minute] = match;
+    const time = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
+    return Number.isNaN(time) ? undefined : time;
+  }
+  const fallback = Date.parse(value);
+  return Number.isNaN(fallback) ? undefined : fallback;
+}
+
 function compareByRecency(a: LotteryRecord, b: LotteryRecord): number {
   const aTime = Date.parse(a.orderDatetime ?? "");
   const bTime = Date.parse(b.orderDatetime ?? "");
   if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return bTime - aTime;
+  if (!Number.isNaN(aTime)) return -1;
+  if (!Number.isNaN(bTime)) return 1;
+  const aEvent = parseEventDatetime(a.eventDatetime);
+  const bEvent = parseEventDatetime(b.eventDatetime);
+  if (aEvent !== undefined && bEvent !== undefined) return bEvent - aEvent;
+  if (aEvent !== undefined) return -1;
+  if (bEvent !== undefined) return 1;
   return (b.orderDatetime ?? "").localeCompare(a.orderDatetime ?? "");
 }
 
 export function AccountOverview(props: AccountOverviewProps) {
   const [modalAccount, setModalAccount] = useState<AccountOverviewEntry>();
+  const [modalPerformance, setModalPerformance] = useState<TopPerformanceEntry>();
   const [genderChartMode, setGenderChartMode] = useState<SegmentChartMode>("bar");
   const [outcomeChartMode, setOutcomeChartMode] = useState<SegmentChartMode>("bar");
   const [recentActivityAccountId, setRecentActivityAccountId] = useState("all");
@@ -208,8 +230,9 @@ export function AccountOverview(props: AccountOverviewProps) {
         </div>
       </section>
       <section className="panel-card">
-        <div className="panel-head"><h2><Flame size={16} />最多人抽的公演</h2></div>
-        <TopPerformancesList performances={overview.topPerformances} />
+        <div className="panel-head"><h2><Flame size={16} />最多账号抽的公演</h2></div>
+        <p className="muted">按参与账号数排名；点击某场公演查看各账号分别抽了多少次、当选还是落选。</p>
+        <TopPerformancesList performances={overview.topPerformances} onSelect={setModalPerformance} />
       </section>
     </div>
 
@@ -220,6 +243,10 @@ export function AccountOverview(props: AccountOverviewProps) {
 
     <Modal open={!!modalAccount} title={modalAccount?.account.label || modalAccount?.account.eplusEmail} subtitle="公演抽选记录" onClose={() => setModalAccount(undefined)} wide>
       {modalAccount ? <PerformanceModalBody entry={modalAccount} /> : null}
+    </Modal>
+
+    <Modal open={!!modalPerformance} title={modalPerformance?.tourName} subtitle={modalPerformance?.eventDatetime || "各账号抽选情况"} onClose={() => setModalPerformance(undefined)} wide>
+      {modalPerformance ? <TopPerformanceModalBody entry={modalPerformance} accountLabelById={accountLabelById} /> : null}
     </Modal>
   </section>;
 }
@@ -247,10 +274,17 @@ function RecentActivityList(props: { readonly records: readonly LotteryRecord[];
   </ul>;
 }
 
-function TopPerformancesList(props: { readonly performances: readonly TopPerformanceEntry[] }) {
+function TopPerformancesList(props: { readonly performances: readonly TopPerformanceEntry[]; readonly onSelect: (performance: TopPerformanceEntry) => void }) {
   if (props.performances.length === 0) return <p className="empty-state">暂无抽选记录。</p>;
   return <ol className="ranking-list">
-    {props.performances.map((performance, index) => <li key={performance.performanceKey} className="ranking-item">
+    {props.performances.map((performance, index) => <li
+      key={performance.performanceKey}
+      className="ranking-item ranking-item-clickable"
+      role="button"
+      tabIndex={0}
+      onClick={() => props.onSelect(performance)}
+      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect(performance); } }}
+    >
       <span className="ranking-index">{index + 1}</span>
       <div className="activity-item-text">
         <strong>{performance.tourName}</strong>
@@ -278,5 +312,22 @@ function PerformanceModalBody(props: { readonly entry: AccountOverviewEntry }) {
       <div><span>中率</span><strong>{formatPercent(stats.winRate)}</strong></div>
     </div>
     <SortableFilterableTable columns={columns} rows={stats.performances} rowKey={(performance) => performance.performanceKey} emptyMessage="该账号还没有抽选记录。" />
+  </div>;
+}
+
+function TopPerformanceModalBody(props: { readonly entry: TopPerformanceEntry; readonly accountLabelById: ReadonlyMap<string, string> }) {
+  const { entry } = props;
+  const columns = useMemo((): Column<TopPerformanceAccountEntry>[] => [
+    { key: "account", label: "账号", render: (row) => props.accountLabelById.get(row.accountId) ?? "未知账号", sortValue: (row) => props.accountLabelById.get(row.accountId) ?? "", filter: { type: "text", value: (row) => props.accountLabelById.get(row.accountId) ?? "" } },
+    { key: "draws", label: "抽选次数", render: (row) => row.totalDraws, sortValue: (row) => row.totalDraws, filter: { type: "min", value: (row) => row.totalDraws }, noWrap: true, align: "right" },
+    { key: "outcome", label: "结果", render: (row) => <span className={outcomeBadgeClass(row.outcome)}>{OUTCOME_LABEL[row.outcome]}</span>, sortValue: (row) => row.outcome, filter: { type: "select", value: (row) => OUTCOME_LABEL[row.outcome] }, noWrap: true }
+  ], [props.accountLabelById]);
+
+  return <div className="stack">
+    <div className="summary-grid">
+      <div><span>参与账号数</span><strong>{entry.accountCount}</strong></div>
+      <div><span>抽选总次数</span><strong>{entry.totalDraws}</strong></div>
+    </div>
+    <SortableFilterableTable columns={columns} rows={entry.accounts} rowKey={(row) => row.accountId} emptyMessage="暂无数据。" />
   </div>;
 }

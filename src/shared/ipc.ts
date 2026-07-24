@@ -65,5 +65,6 @@ export type {
   PerformanceHistory,
   SaveExportInput,
   SaveExportResult,
+  TopPerformanceAccountEntry,
   TopPerformanceEntry
 } from "./types.js";
