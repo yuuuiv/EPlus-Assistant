@@ -24,6 +24,10 @@
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 15.5px;
   line-height: 1.5;
+  /* Every digit in the app - table cells, badges, ranking numbers, chart labels - shares one
+     figure style instead of only the handful of spots that opted in individually, so numbers
+     never sit at slightly different widths/kerning depending on which component rendered them. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Dark is the default surface (also the fallback before theme.ts runs). */
@@ -43,6 +47,10 @@
   --text:          #e2e8f0;
   --text-muted:    #8892a4;
   --text-subtle:   #4e5a6e;
+
+  /* Custom <select> chevron (see "Form controls" below): baked to a concrete color per theme
+     since a background-image data URI can't read a CSS custom property/currentColor itself. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%238892a4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Brand palette: Wisteria Blue / Muted Teal / Lavender Grey / Lime Cream —
      used near-literally here since their mid lightness already pops against
@@ -112,6 +120,8 @@
   --text:          #1a2130;
   --text-muted:    #5b6472;
   --text-subtle:   #8891a1;
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%235b6472' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Same brand hues as the dark theme, deepened ~25% lightness so they clear
      AA text contrast on white. Danger is kept as a true red — see the note
@@ -417,6 +427,22 @@ input:hover, select:hover, textarea:hover {
   border-color: var(--border-strong);
 }
 
+/* Native <select> chrome (its own arrow glyph, its own inset) doesn't belong to any design
+   system - dropped in as-is it always reads as the one un-styled control next to every other
+   custom input/button/badge. Swap in the same chevron mark used for sort/expand affordances
+   elsewhere, sized and inset to match this app's own icon scale (14px, matching th-sort's
+   ArrowUpDown) rather than the browser's own arrow. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-inline-end: 2.25rem;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 14px;
+}
+:root[dir="rtl"] select { background-position: left 0.7rem center; }
+
 /* ── Buttons ─────────────────────────────────────────────────────────── */
 button {
   border: 1px solid var(--border);
@@ -489,6 +515,18 @@ button:active {
   color: var(--text);
   background: var(--surface-c);
   border-color: var(--border-strong);
+}
+
+/* A <select> sitting inline in a panel-head/.actions row next to icon-buttons and segmented
+   controls - sized to match them (same padding/font-size recipe as .icon-button) instead of
+   the full form-field select, which was noticeably taller and heavier than everything else
+   in the same row. */
+.select-inline {
+  width: auto;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  background-position: right 0.55rem center;
+  background-size: 12px;
 }
 
 /* ── Focus states ────────────────────────────────────────────────────── */
@@ -573,6 +611,11 @@ h1 {
   justify-content: space-between;
   gap: 0.75rem;
   align-items: center;
+  /* Matches .icon-button's own border-box height, so a panel-head stays the same height
+     whether it's a bare title or a title plus an inline control (select, toggle, button) -
+     without this, two side-by-side cards whose heads differ start their list/table content
+     at different vertical offsets even though both lists begin "right under the head". */
+  min-block-size: 2.4rem;
   margin-bottom: 1rem;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
@@ -593,6 +636,11 @@ h1 {
 .panel-card h2 svg { color: var(--primary); flex: 0 0 auto; }
 
 .muted {
+  /* Every card-note paragraph uses this class but relies on the panel-card's own flex `gap`
+     for spacing (see .panel-card) - without this reset, the browser's default <p> block
+     margin stacks on top of that gap on both sides, roughly doubling the whitespace above
+     and below the note versus every other gap in the same card. */
+  margin: 0;
   color: var(--text-muted);
   font-size: 0.82rem;
 }
@@ -973,7 +1021,11 @@ tbody tr:last-child td { border-bottom: none; }
   bottom: 0;
   margin-inline: auto;
   width: min(50rem, 100%);
-  min-block-size: min(60vh, 100%);
+  /* Hug content instead of padding every drawer up to 60% of the viewport - a short
+     confirmation and a long record table used to render at wildly different apparent
+     "fullness" for the same reason (one had dead space, the other scrolled). A small
+     floor just keeps a near-empty drawer from collapsing to an unusably thin strip. */
+  min-block-size: min(10rem, 100%);
   max-block-size: 88vh;
   display: flex;
   border: 1px solid var(--border);
@@ -1050,10 +1102,24 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ── Activity feed / ranking lists (overview: recent draws, hottest shows) ── */
 .activity-list, .ranking-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; max-block-size: 26rem; overflow: auto; }
-.activity-item, .ranking-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-d); }
+/* Every other hoverable row/block in the app (.item-block, .run-row, .log-stack .log,
+   .account-picker-item, .check-row) transitions background/border on hover - this one
+   didn't, so .ranking-item-clickable's hover state below used to cut instantly instead of
+   fading in like its siblings elsewhere in the same page. */
+.activity-item, .ranking-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-d); transition: border-color var(--transition), background-color var(--transition); }
 .activity-item .badge, .ranking-item .badge { flex: 0 0 auto; }
 .activity-item-text { display: grid; gap: 0.15rem; min-width: 0; flex: 1 1 auto; }
-.activity-item-text strong { font-weight: 600; overflow-wrap: anywhere; }
+/* Single line, truncated with an ellipsis (full text still reachable via the row's title
+   attribute) rather than left to wrap at an arbitrary width - a long tour name used to wrap
+   to a second line while its neighbors stayed on one, so row heights (and the two adjacent
+   lists' left/right rhythm) varied with whatever text happened to land in each row. */
+.activity-item-text strong,
+.activity-item-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-item-text strong { font-weight: 600; }
 .ranking-index { display: grid; place-items: center; flex: 0 0 auto; inline-size: 1.8rem; block-size: 1.8rem; border-radius: 50%; background: var(--primary-dim); color: var(--primary); font-weight: 700; font-size: 0.85rem; }
 .ranking-item-clickable { cursor: pointer; }
 .ranking-item-clickable:hover { border-color: var(--border-strong); background: var(--surface-c); }

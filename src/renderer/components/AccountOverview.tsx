@@ -217,7 +217,7 @@ export function AccountOverview(props: AccountOverviewProps) {
         <div className="panel-head">
           <h2><History size={16} />最近抽选动态</h2>
           <div className="actions">
-            <select aria-label="按账号查看" style={{ width: "auto" }} value={recentActivityAccountId} onChange={(event) => setRecentActivityAccountId(event.target.value)}>
+            <select className="select-inline" aria-label="按账号查看" value={recentActivityAccountId} onChange={(event) => setRecentActivityAccountId(event.target.value)}>
               <option value="all">全部账号</option>
               {overview.accounts.map((entry) => <option key={entry.account.id} value={entry.account.id}>{entry.account.label || entry.account.eplusEmail}</option>)}
             </select>
@@ -266,8 +266,8 @@ function RecentActivityList(props: { readonly records: readonly LotteryRecord[];
       return <li key={record.id} className="activity-item">
         <span className={outcomeBadgeClass(outcome)}>{outcomeLabel(record.status, outcome)}</span>
         <div className="activity-item-text">
-          <strong>{record.tourName}</strong>
-          <span className="muted">{props.accountLabelById.get(record.accountId) ?? "未知账号"} · {record.orderDatetime || record.eventDatetime || "-"}</span>
+          <strong title={record.tourName}>{record.tourName}</strong>
+          <span className="muted" title={`${props.accountLabelById.get(record.accountId) ?? "未知账号"} · ${record.orderDatetime || record.eventDatetime || "-"}`}>{props.accountLabelById.get(record.accountId) ?? "未知账号"} · {record.orderDatetime || record.eventDatetime || "-"}</span>
         </div>
       </li>;
     })}
@@ -287,8 +287,8 @@ function TopPerformancesList(props: { readonly performances: readonly TopPerform
     >
       <span className="ranking-index">{index + 1}</span>
       <div className="activity-item-text">
-        <strong>{performance.tourName}</strong>
-        <span className="muted">{performance.eventDatetime || "-"} · {performance.accountCount} 个账号抽过</span>
+        <strong title={performance.tourName}>{performance.tourName}</strong>
+        <span className="muted" title={`${performance.eventDatetime || "-"} · ${performance.accountCount} 个账号抽过`}>{performance.eventDatetime || "-"} · {performance.accountCount} 个账号抽过</span>
       </div>
       <span className="badge badge-teal">{performance.totalDraws} 次抽选</span>
     </li>)}
