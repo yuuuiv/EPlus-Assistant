@@ -16,6 +16,18 @@ function SegmentChartModeToggle(props: { readonly mode: SegmentChartMode; readon
   </div>;
 }
 
+/** Which of a TopPerformanceEntry's two counts currently drives the ranking - a performance
+ *  drawn by many accounts and one drawn many times by few accounts are both "hot" in a different
+ *  sense, so the reader picks which sense they mean instead of one metric silently winning. */
+type TopPerformanceSortMode = "accounts" | "draws";
+
+function TopPerformanceSortToggle(props: { readonly mode: TopPerformanceSortMode; readonly onChange: (mode: TopPerformanceSortMode) => void }) {
+  return <div className="segmented" role="group" aria-label="切换排序指标">
+    <button className={props.mode === "accounts" ? "seg active" : "seg"} onClick={() => props.onChange("accounts")} title="按参与账号数排序"><Users size={14} /></button>
+    <button className={props.mode === "draws" ? "seg active" : "seg"} onClick={() => props.onChange("draws")} title="按抽选总次数排序"><Ticket size={14} /></button>
+  </div>;
+}
+
 interface AccountOverviewProps {
   readonly overview: AccountsOverview | undefined;
   readonly loading: boolean;
@@ -73,6 +85,7 @@ export function AccountOverview(props: AccountOverviewProps) {
   const [modalPerformance, setModalPerformance] = useState<TopPerformanceEntry>();
   const [genderChartMode, setGenderChartMode] = useState<SegmentChartMode>("bar");
   const [outcomeChartMode, setOutcomeChartMode] = useState<SegmentChartMode>("bar");
+  const [topPerformanceSortMode, setTopPerformanceSortMode] = useState<TopPerformanceSortMode>("accounts");
   const [recentActivityAccountId, setRecentActivityAccountId] = useState("all");
   const [accountRecentRecords, setAccountRecentRecords] = useState<LotteryRecord[]>();
   const colors = useThemeColors();
@@ -103,6 +116,13 @@ export function AccountOverview(props: AccountOverviewProps) {
 
   const overview = props.overview;
   const accountLabelById = new Map(overview.accounts.map((entry) => [entry.account.id, entry.account.label || entry.account.eplusEmail]));
+
+  // The server-side default (accountCount, then totalDraws as tiebreak) is just one of the two
+  // orderings the reader might want - re-sort locally instead of round-tripping to main for a
+  // toggle this cheap.
+  const sortedTopPerformances = [...overview.topPerformances].sort((a, b) => (topPerformanceSortMode === "draws"
+    ? b.totalDraws - a.totalDraws || b.accountCount - a.accountCount
+    : b.accountCount - a.accountCount || b.totalDraws - a.totalDraws));
 
   const genderEntries = Object.entries(overview.genderBreakdown).sort(([a], [b]) => (a === "未知" ? 1 : b === "未知" ? -1 : 0));
   const genderPalette = [colors.chart1, colors.chart2, colors.chart3, colors.chart4];
@@ -230,9 +250,9 @@ export function AccountOverview(props: AccountOverviewProps) {
         </div>
       </section>
       <section className="panel-card">
-        <div className="panel-head"><h2><Flame size={16} />最多账号抽的公演</h2></div>
-        <p className="muted">按参与账号数排名；点击某场公演查看各账号分别抽了多少次、当选还是落选。</p>
-        <TopPerformancesList performances={overview.topPerformances} onSelect={setModalPerformance} />
+        <div className="panel-head"><h2><Flame size={16} />最多账号抽的公演</h2><div className="actions"><TopPerformanceSortToggle mode={topPerformanceSortMode} onChange={setTopPerformanceSortMode} /></div></div>
+        <p className="muted">{topPerformanceSortMode === "draws" ? "按抽选总次数排名（并列时看参与账号数）" : "按参与账号数排名（并列时看抽选总次数）"}；点击某场公演查看各账号分别抽了多少次、当选还是落选。</p>
+        <TopPerformancesList performances={sortedTopPerformances} sortMode={topPerformanceSortMode} onSelect={setModalPerformance} />
       </section>
     </div>
 
@@ -274,24 +294,32 @@ function RecentActivityList(props: { readonly records: readonly LotteryRecord[];
   </ul>;
 }
 
-function TopPerformancesList(props: { readonly performances: readonly TopPerformanceEntry[]; readonly onSelect: (performance: TopPerformanceEntry) => void }) {
+function TopPerformancesList(props: { readonly performances: readonly TopPerformanceEntry[]; readonly sortMode: TopPerformanceSortMode; readonly onSelect: (performance: TopPerformanceEntry) => void }) {
   if (props.performances.length === 0) return <p className="empty-state">暂无抽选记录。</p>;
   return <ol className="ranking-list">
-    {props.performances.map((performance, index) => <li
-      key={performance.performanceKey}
-      className="ranking-item ranking-item-clickable"
-      role="button"
-      tabIndex={0}
-      onClick={() => props.onSelect(performance)}
-      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect(performance); } }}
-    >
-      <span className="ranking-index">{index + 1}</span>
-      <div className="activity-item-text">
-        <strong title={performance.tourName}>{performance.tourName}</strong>
-        <span className="muted" title={`${performance.eventDatetime || "-"} · ${performance.accountCount} 个账号抽过`}>{performance.eventDatetime || "-"} · {performance.accountCount} 个账号抽过</span>
-      </div>
-      <span className="badge badge-teal">{performance.totalDraws} 次抽选</span>
-    </li>)}
+    {props.performances.map((performance, index) => {
+      const accountsText = `${performance.accountCount} 个账号抽过`;
+      const drawsText = `${performance.totalDraws} 次抽选`;
+      // Whichever count is currently the sort key gets the prominent badge - the other one moves
+      // into the muted subtitle, so it's visually obvious which number is driving the order.
+      const primaryText = props.sortMode === "draws" ? drawsText : accountsText;
+      const secondaryText = props.sortMode === "draws" ? accountsText : drawsText;
+      return <li
+        key={performance.performanceKey}
+        className="ranking-item ranking-item-clickable"
+        role="button"
+        tabIndex={0}
+        onClick={() => props.onSelect(performance)}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect(performance); } }}
+      >
+        <span className="ranking-index">{index + 1}</span>
+        <div className="activity-item-text">
+          <strong title={performance.tourName}>{performance.tourName}</strong>
+          <span className="muted" title={`${performance.eventDatetime || "-"} · ${secondaryText}`}>{performance.eventDatetime || "-"} · {secondaryText}</span>
+        </div>
+        <span className="badge badge-teal">{primaryText}</span>
+      </li>;
+    })}
   </ol>;
 }
 
