@@ -1,6 +1,6 @@
 {
   "name": "eplus-assistant",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Local-first Eplus account manager: view and import member data collected by the eplus-collector browser userscript",
   "main": "dist-electron/main/main.js",

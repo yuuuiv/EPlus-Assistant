@@ -243,16 +243,17 @@ export function AccountOverview(props: AccountOverviewProps) {
             </select>
           </div>
         </div>
-        <div key={recentActivityAccountId} className="chart-swap">
+        <div key={recentActivityAccountId} className="chart-swap panel-scroll-fill">
           {recentActivityAccountId !== "all" && !accountRecentRecords
             ? <p className="empty-state">正在加载…</p>
             : <RecentActivityList records={recentActivityAccountId === "all" ? overview.recentActivity : (accountRecentRecords ?? [])} accountLabelById={accountLabelById} />}
         </div>
       </section>
       <section className="panel-card">
-        <div className="panel-head"><h2><Flame size={16} />最多账号抽的公演</h2><div className="actions"><TopPerformanceSortToggle mode={topPerformanceSortMode} onChange={setTopPerformanceSortMode} /></div></div>
-        <p className="muted">{topPerformanceSortMode === "draws" ? "按抽选总次数排名（并列时看参与账号数）" : "按参与账号数排名（并列时看抽选总次数）"}；点击某场公演查看各账号分别抽了多少次、当选还是落选。</p>
-        <TopPerformancesList performances={sortedTopPerformances} sortMode={topPerformanceSortMode} onSelect={setModalPerformance} />
+        <div className="panel-head"><h2><Flame size={16} />全体抽选统计</h2><div className="actions"><TopPerformanceSortToggle mode={topPerformanceSortMode} onChange={setTopPerformanceSortMode} /></div></div>
+        <div className="panel-scroll-fill">
+          <TopPerformancesList performances={sortedTopPerformances} sortMode={topPerformanceSortMode} onSelect={setModalPerformance} />
+        </div>
       </section>
     </div>
 

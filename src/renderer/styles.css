@@ -1102,6 +1102,15 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ── Activity feed / ranking lists (overview: recent draws, hottest shows) ── */
 .activity-list, .ranking-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; max-block-size: 26rem; overflow: auto; }
+/* The two overview lists sit side by side in .panel-layout-two, where the grid stretches the
+   shorter card to its neighbour's height. With the plain 26rem cap the extra height became
+   dead space under the shorter card's list, so its scrollbar stopped well above the card's
+   bottom edge. Growing the scroll area into that space instead keeps each scrollbar spanning
+   its whole card, and since both cards end up the same height with identical heads, the two
+   scroll areas stay aligned with each other. */
+.panel-scroll-fill { display: flex; flex-direction: column; flex: 1 1 auto; block-size: 26rem; }
+.panel-scroll-fill > .activity-list,
+.panel-scroll-fill > .ranking-list { flex: 1 1 auto; max-block-size: none; align-content: start; }
 /* Every other hoverable row/block in the app (.item-block, .run-row, .log-stack .log,
    .account-picker-item, .check-row) transitions background/border on hover - this one
    didn't, so .ranking-item-clickable's hover state below used to cut instantly instead of
